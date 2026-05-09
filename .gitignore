@@ -1,0 +1,93 @@
+# ─── OS ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Editors / IDEs ─────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Secrets & local env ──────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Go ─────────────────────────────────────────────────────────────
+# Binaries / build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+/build/
+
+# Go workspace (optional; remove if you commit go.work)
+go.work
+go.work.sum
+
+# Vendor (uncomment if you do not commit vendor/)
+# vendor/
+
+# Coverage & profiling
+*.coverprofile
+coverage.out
+coverage.html
+cpu.prof
+mem.prof
+
+# ─── Python ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Packaging / install
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# uv / poetry / pipenv — commit lockfiles (uv.lock, poetry.lock); ignore env noise only
+
+# Testing & type checking
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+.nox/
+
+# Jupyter (if used alongside FastAPI)
+.ipynb_checkpoints/
+
+# ─── FastAPI / ASGI (runtime artifacts) ───────────────────────────
+*.db
+*.sqlite3
+
+# ─── Logs & temp ───────────────────────────────────────────────────
+*.log
+tmp/
+temp/
