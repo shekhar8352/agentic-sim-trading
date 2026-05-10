@@ -10,14 +10,31 @@ Layout (Phase 0):
 | `agent-orchestrator/` | FastAPI — LLM agents, prompts, calls into the simulator |
 | `infra/` | `docker-compose.yml`, `init.sql` |
 | `docs/` | `rules.md`, `rroadmap.md`, `api-spec.yaml` |
+| `Makefile` | Repo-root targets: `make help`, `make up`, local dev, Go tooling |
+
+## Makefile
+
+From repo root, `make help` lists targets. Common commands:
+
+| Command | Description |
+|---------|-------------|
+| `make up` | Start full stack (`docker compose` in `infra/`, with build) |
+| `make down` | Stop Compose stack |
+| `make dev-simulator` | Run Go simulator locally on `:8070` |
+| `make install-orchestrator` then `make dev-orchestrator` | Run FastAPI locally on `:8071` |
 
 ## Quick start (Docker)
 
 From repo root:
 
 ```bash
-cd infra
-docker compose up --build
+make up
+```
+
+Equivalent manual command:
+
+```bash
+cd infra && docker compose up --build
 ```
 
 - **PostgreSQL:** `localhost:5432`, database `tradingsim`, user `admin`, password `secret`
@@ -28,8 +45,8 @@ docker compose up --build
 
 ## Local dev (without Docker)
 
-- Go simulator: see `market-simulator/README.md`
-- Orchestrator: see `agent-orchestrator/README.md`
+- `make dev-simulator` — or see `market-simulator/README.md`
+- `make install-orchestrator` and `make dev-orchestrator` — or see `agent-orchestrator/README.md`
 
 ## Simulation rules
 

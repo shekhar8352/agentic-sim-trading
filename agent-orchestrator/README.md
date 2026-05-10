@@ -4,8 +4,16 @@ Runs AI agents, manages prompts, and talks to the Go **market-simulator** servic
 
 ## Run locally
 
+From **repository root** (after `pip install` deps into your environment or venv):
+
 ```bash
-cd agent-orchestrator
+make install-orchestrator   # once: editable install with dev extras
+make dev-orchestrator
+```
+
+Or from this directory:
+
+```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .
@@ -16,4 +24,4 @@ Set `MARKET_SIMULATOR_URL` if the simulator is not on `http://localhost:8070`.
 
 ## Docker
 
-Built by `infra/docker-compose.yml` as service `agent-orchestrator`.
+Built by `infra/docker-compose.yml` as service `agent-orchestrator`. From repo root: `make up`.

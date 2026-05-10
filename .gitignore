@@ -26,6 +26,7 @@ Thumbs.db
 /bin/
 /dist/
 /build/
+market-simulator/bin/
 
 # Go workspace (optional; remove if you commit go.work)
 go.work
