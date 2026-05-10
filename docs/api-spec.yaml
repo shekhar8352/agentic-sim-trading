@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info:
+  title: Trading simulation platform — API sketch
+  version: 0.1.0
+  description: |
+    Phase 0 placeholder. The **market-simulator** (Go) and **agent-orchestrator** (FastAPI)
+    each expose `GET /health` on their own host/port. Expand this spec as REST routes land.
+
+servers:
+  - url: http://localhost:8070
+    description: Market simulator (Go)
+  - url: http://localhost:8071
+    description: Agent orchestrator (Python)
+
+tags:
+  - name: Health
+    description: Liveness probes
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health
+      description: |
+        Available on **both** services: port 8070 (simulator) and 8071 (orchestrator).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                simulator:
+                  summary: Market simulator
+                  value:
+                    status: ok
+                    service: market-simulator
+                orchestrator:
+                  summary: Agent orchestrator
+                  value:
+                    status: ok
+                    service: agent-orchestrator
+                    market_simulator_url: http://market-simulator:8070
