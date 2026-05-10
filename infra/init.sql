@@ -34,7 +34,7 @@ CREATE TABLE simulations (
     name            VARCHAR(100),
     start_date      DATE,
     end_date        DATE,
-    current_date    DATE,
+    as_of_date      DATE,
     status          VARCHAR(20),
     config          JSONB,
     created_at      TIMESTAMPTZ DEFAULT NOW()
