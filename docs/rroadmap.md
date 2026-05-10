@@ -257,7 +257,7 @@ CREATE TABLE simulations (
     name            VARCHAR(100),
     start_date      DATE,
     end_date        DATE,
-    current_date    DATE,             -- where the clock is right now
+    as_of_date      DATE,             -- simulation clock (not SQL current_date — reserved)
     status          VARCHAR(20),      -- 'pending','running','paused','completed'
     config          JSONB,            -- starting capital, rules, etc.
     created_at      TIMESTAMPTZ DEFAULT NOW()

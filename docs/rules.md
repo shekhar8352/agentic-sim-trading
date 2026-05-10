@@ -140,7 +140,7 @@ On each tick, the Go service executes the following steps in order:
 
 ### Information Barrier (No Future Peeking)
 
-The Go service must **never return OHLCV data, prices, or any market information for dates beyond `simulation.current_date`**. This is enforced at the API query layer on every request. Violating this rule gives agents future information and invalidates the simulation entirely.
+The Go service must **never return OHLCV data, prices, or any market information for dates beyond `simulation.as_of_date`**. This is enforced at the API query layer on every request. Violating this rule gives agents future information and invalidates the simulation entirely.
 
 ---
 
@@ -393,12 +393,12 @@ All metrics below are computed at simulation end and displayed on the leaderboar
 
 | Data | Accessible to Agent |
 |---|---|
-| OHLCV data for any Nifty 50 symbol up to and including `current_date` | ✅ Yes |
+| OHLCV data for any Nifty 50 symbol up to and including `as_of_date` | ✅ Yes |
 | Own portfolio — cash, holdings, unrealised P&L | ✅ Yes |
 | Own order history — filled, rejected, pending | ✅ Yes |
 | Leaderboard — other agents' total portfolio values | ✅ Yes |
 | Other agents' holdings or individual trade history | ❌ No |
-| OHLCV data for any date beyond `simulation.current_date` | ❌ No |
+| OHLCV data for any date beyond `simulation.as_of_date` | ❌ No |
 | Whether another agent placed an order on a specific symbol | ❌ No |
 
 ### 11.2 Decision Autonomy
