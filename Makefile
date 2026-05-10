@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help up down build ps logs \
-	dev-simulator dev-orchestrator install-orchestrator \
+	dev-simulator dev-orchestrator install-orchestrator install-orchestrator-ingest ingest-data \
 	go-build go-test go-mod-tidy lint-orchestrator
 
 COMPOSE := docker compose -f infra/docker-compose.yml
@@ -18,6 +18,8 @@ help:
 	@echo "  make dev-simulator   Run Go market-simulator locally (:8070)"
 	@echo "  make dev-orchestrator  Run FastAPI orchestrator locally (:8071; install first)"
 	@echo "  make install-orchestrator  pip install -e '.[dev]' in agent-orchestrator/"
+	@echo "  make install-orchestrator-ingest  pip install '.[dev,ingest]' (yfinance + DB load)"
+	@echo "  make ingest-data         Run scripts/ingest_data.py (Postgres must be up)"
 	@echo ""
 	@echo "  make go-build        go build market-simulator"
 	@echo "  make go-test         go test ./... in market-simulator"
@@ -44,6 +46,12 @@ dev-simulator:
 
 install-orchestrator:
 	cd agent-orchestrator && pip install -e ".[dev]"
+
+install-orchestrator-ingest:
+	cd agent-orchestrator && pip install -e ".[dev,ingest]"
+
+ingest-data:
+	cd agent-orchestrator && python scripts/ingest_data.py
 
 dev-orchestrator:
 	cd agent-orchestrator && uvicorn app.main:app --reload --host 0.0.0.0 --port 8071

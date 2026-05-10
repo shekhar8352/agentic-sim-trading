@@ -22,6 +22,21 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8071
 
 Set `MARKET_SIMULATOR_URL` if the simulator is not on `http://localhost:8070`.
 
+### Load historical OHLCV (roadmap Step 5)
+
+Requires Postgres matching `infra/init.sql` (for example `docker compose -f infra/docker-compose.data.yml up -d`). Install ingestion extras:
+
+```bash
+pip install -e ".[ingest]"
+# or from repo root: make install-orchestrator-ingest
+```
+
+```bash
+export DATABASE_URL='postgresql://admin:secret@localhost:5432/tradingsim'   # default if unset
+python scripts/ingest_data.py           # full Nifty 50, ~2022–2024 EOD adjusted
+python scripts/ingest_data.py --dry-run # one symbol, no DB writes
+```
+
 ## Docker
 
 Built by `infra/docker-compose.yml` as service `agent-orchestrator`. From repo root: `make up`.
