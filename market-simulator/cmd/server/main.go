@@ -1,31 +1,72 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/agentic-sim-trading/market-simulator/internal/api"
+	"github.com/agentic-sim-trading/market-simulator/internal/db"
+	"github.com/agentic-sim-trading/market-simulator/internal/market"
+	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
+	"github.com/agentic-sim-trading/market-simulator/internal/redisconn"
 )
 
 func main() {
+	ctx := context.Background()
+
+	pool, err := db.Connect(ctx)
+	if err != nil {
+		log.Fatalf("postgres: %v", err)
+	}
+	if pool != nil {
+		defer pool.Close()
+	}
+
+	rdb := redisconn.New()
+
+	data := market.NewData(pool)
+	quotes := market.NewQuoteProvider(data)
+	pm := portfolio.NewManager(pool)
+
+	h := &api.Handler{
+		DB:        pool,
+		Redis:     rdb,
+		Market:    data,
+		Quotes:    quotes,
+		Portfolio: pm,
+	}
+
 	addr := ":8070"
 	if v := os.Getenv("LISTEN_ADDR"); v != "" {
 		addr = v
 	}
 
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	r := api.NewRouter(h)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok","service":"market-simulator"}`))
-	})
+	go func() {
+		log.Printf("market-simulator listening on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
 
-	log.Printf("market-simulator listening on %s", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
-		log.Fatal(err)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
 	}
 }
