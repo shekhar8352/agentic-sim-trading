@@ -20,21 +20,29 @@ type SimClock struct {
 }
 
 func NewSimClock(simulationID uuid.UUID, tradingDays []time.Time, rdb *redis.Client) *SimClock {
+	return NewSimClockAt(simulationID, tradingDays, 0, "paused", rdb)
+}
+
+// NewSimClockAt positions the clock on tradingDays[currentIndex] with an explicit lifecycle status.
+func NewSimClockAt(simulationID uuid.UUID, tradingDays []time.Time, currentIndex int, status string, rdb *redis.Client) *SimClock {
 	c := &SimClock{
 		SimulationID: simulationID,
 		TradingDays:  tradingDays,
-		CurrentIndex: 0,
-		Status:       "paused",
+		CurrentIndex: currentIndex,
+		Status:       status,
 		redis:        rdb,
 	}
-	if len(tradingDays) > 0 {
-		c.CurrentDate = tradingDays[0]
+	if len(tradingDays) > 0 && currentIndex >= 0 && currentIndex < len(tradingDays) {
+		c.CurrentDate = tradingDays[currentIndex]
 	}
 	return c
 }
 
-// Tick moves to the next trading day and emits sim.tick (or sim.completed).
+// Tick moves to the next trading day and emits sim.tick (or sim.completed), matching roadmap Step 7.
 func (c *SimClock) Tick(ctx context.Context) error {
+	if c.Status != "running" {
+		return ErrClockNotRunning
+	}
 	if len(c.TradingDays) == 0 {
 		c.Status = "completed"
 		return c.publishEvent(ctx, "sim.completed", map[string]any{
