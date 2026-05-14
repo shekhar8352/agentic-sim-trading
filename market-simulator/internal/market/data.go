@@ -78,3 +78,30 @@ func (d *Data) BarsForSymbol(ctx context.Context, symbol string, asOf time.Time,
 	}
 	return out, rows.Err()
 }
+
+// DistinctTradingDays returns sorted calendar dates present in OHLCV between start and end (inclusive).
+func (d *Data) DistinctTradingDays(ctx context.Context, start, end time.Time) ([]time.Time, error) {
+	if d.pool == nil {
+		return nil, ErrNoDatabase
+	}
+	rows, err := d.pool.Query(ctx, `
+		SELECT DISTINCT date
+		FROM ohlcv
+		WHERE date >= $1::date AND date <= $2::date
+		ORDER BY date ASC
+	`, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var days []time.Time
+	for rows.Next() {
+		var t time.Time
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		days = append(days, t.UTC())
+	}
+	return days, rows.Err()
+}

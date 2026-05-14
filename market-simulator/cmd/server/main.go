@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentic-sim-trading/market-simulator/internal/api"
+	"github.com/agentic-sim-trading/market-simulator/internal/clock"
 	"github.com/agentic-sim-trading/market-simulator/internal/db"
 	"github.com/agentic-sim-trading/market-simulator/internal/market"
 	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
@@ -30,15 +31,15 @@ func main() {
 	rdb := redisconn.New()
 
 	data := market.NewData(pool)
-	quotes := market.NewQuoteProvider(data)
 	pm := portfolio.NewManager(pool)
+	reg := clock.NewRegistry(pool, rdb, data)
 
 	h := &api.Handler{
 		DB:        pool,
 		Redis:     rdb,
 		Market:    data,
-		Quotes:    quotes,
 		Portfolio: pm,
+		Clocks:    reg,
 	}
 
 	addr := ":8070"
