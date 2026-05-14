@@ -39,6 +39,22 @@ Default listen address: `:8070`. Override with `LISTEN_ADDR`.
 
 Without `DATABASE_URL`, `/health` still returns OK; quote/OHLCV endpoints respond `501` with a JSON hint.
 
+## Simulation clock (roadmap Step 7)
+
+Trading days are derived from **distinct `ohlcv.date`** values between each simulation’s `start_date` and `end_date`.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `POST` | `/api/v1/simulations` | Create simulation (`{"name","start_date","end_date","config?"}` — dates `YYYY-MM-DD`). Initial row status: `paused`. |
+| `GET` | `/api/v1/simulations/{id}` | DB row + optional in-memory clock (`clock_loaded`, indices). |
+| `POST` | `/api/v1/simulations/{id}/start` | Build/resume clock, set `running`, persist `as_of_date`, publish **`sim.started`** or **`sim.resumed`**. |
+| `POST` | `/api/v1/simulations/{id}/pause` | Set `paused` (clock stays in memory). |
+| `POST` | `/api/v1/simulations/{id}/tick` | Advance one trading day; persist; publish **`sim.tick`** or **`sim.completed`** (clock unloaded when completed). |
+
+Redis channel **`sim.events`**: JSON payloads include `"event"` (`sim.started`, `sim.resumed`, `sim.tick`, `sim.completed`) plus `simulation_id`, `date`, etc.
+
+**Market data:** optional query `simulation_id` on `GET /api/v1/market/quote/{symbol}` and `GET /api/v1/market/ohlcv/{symbol}` uses that simulation’s current `as_of_date` (from the active clock or Postgres).
+
 Build binary (output in `bin/server`, gitignored):
 
 ```bash
