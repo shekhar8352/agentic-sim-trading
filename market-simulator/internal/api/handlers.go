@@ -6,12 +6,15 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/agentic-sim-trading/market-simulator/internal/clock"
 	"github.com/agentic-sim-trading/market-simulator/internal/market"
+	"github.com/agentic-sim-trading/market-simulator/internal/orders"
 	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
 	"github.com/agentic-sim-trading/market-simulator/internal/simulation"
+	"github.com/agentic-sim-trading/market-simulator/internal/universe"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -78,8 +81,84 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-func (h *Handler) PlaceOrder(w http.ResponseWriter, _ *http.Request) {
-	notImplemented(w, "order placement wired in roadmap Step 8 (matching engine)")
+func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	if h.Market == nil || h.Clocks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "market data or clock registry not configured"})
+		return
+	}
+
+	var req struct {
+		SimulationID uuid.UUID `json:"simulation_id"`
+		AgentID      uuid.UUID `json:"agent_id"`
+		Symbol       string    `json:"symbol"`
+		OrderType    string    `json:"order_type"`
+		Side         string    `json:"side"`
+		Quantity     int       `json:"quantity"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid JSON body"})
+		return
+	}
+	req.Symbol = strings.TrimSpace(req.Symbol)
+	req.OrderType = strings.ToLower(strings.TrimSpace(req.OrderType))
+	req.Side = strings.ToLower(strings.TrimSpace(req.Side))
+
+	if req.SimulationID == uuid.Nil || req.AgentID == uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "simulation_id and agent_id required"})
+		return
+	}
+	if req.Symbol == "" || req.Side == "" || req.OrderType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "symbol, side, order_type required"})
+		return
+	}
+	if req.OrderType != "market" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "only market orders supported in phase 1"})
+		return
+	}
+	if req.Quantity <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "quantity must be positive"})
+		return
+	}
+	if !universe.IsNifty50(req.Symbol) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "symbol must be a Nifty 50 listing (.NS)"})
+		return
+	}
+
+	c, ok := h.Clocks.ActiveClock(req.SimulationID)
+	if !ok || c.Status != "running" {
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": "simulation clock must be running"})
+		return
+	}
+
+	if !h.Clocks.TryAcceptOrderSubmission(req.SimulationID, req.AgentID) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"detail": "order submission limit (10) reached until next processed tick"})
+		return
+	}
+
+	asOf := c.CurrentDate.UTC().Truncate(24 * time.Hour)
+	matchOn, err := h.Market.NextTradingDay(r.Context(), asOf)
+	if err != nil || matchOn.IsZero() {
+		h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "no next trading day after current simulation date"})
+		return
+	}
+
+	id, err := orders.InsertPending(r.Context(), h.DB, req.SimulationID, req.AgentID, req.Symbol, req.OrderType, req.Side, req.Quantity, matchOn)
+	if err != nil {
+		h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "failed to persist order"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":             id.String(),
+		"match_on_date": matchOn.UTC().Format(time.DateOnly),
+		"status":        orders.StatusPending,
+	})
 }
 
 func (h *Handler) GetPortfolio(w http.ResponseWriter, r *http.Request) {
@@ -215,12 +294,135 @@ func (h *Handler) GetOHLCV(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bars)
 }
 
-func (h *Handler) ListOrders(w http.ResponseWriter, _ *http.Request) {
-	notImplemented(w, "GET /api/v1/orders/{agentId} — persistence-backed history (Step 8)")
+func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	agentStr := chi.URLParam(r, "agentId")
+	agentID, err := uuid.Parse(agentStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid agent id"})
+		return
+	}
+	simStr := r.URL.Query().Get("simulation_id")
+	if simStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "query simulation_id required"})
+		return
+	}
+	simulationID, err := uuid.Parse(simStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation_id"})
+		return
+	}
+	limit := 100
+	if ls := r.URL.Query().Get("limit"); ls != "" {
+		if v, err := strconv.Atoi(ls); err == nil && v > 0 && v <= 500 {
+			limit = v
+		}
+	}
+	items, err := orders.ListByAgent(r.Context(), h.DB, simulationID, agentID, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "query failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
-func (h *Handler) CancelOrder(w http.ResponseWriter, _ *http.Request) {
-	notImplemented(w, "DELETE /api/v1/orders/{orderId} — cancel pending (Step 8)")
+func (h *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	orderStr := chi.URLParam(r, "orderId")
+	orderID, err := uuid.Parse(orderStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid order id"})
+		return
+	}
+	simStr := r.URL.Query().Get("simulation_id")
+	if simStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "query simulation_id required"})
+		return
+	}
+	simulationID, err := uuid.Parse(simStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation_id"})
+		return
+	}
+	ok, err := orders.CancelPending(r.Context(), h.DB, simulationID, orderID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "cancel failed"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "pending order not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "canceled"})
+}
+
+func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	simID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation id"})
+		return
+	}
+	if _, err := simulation.Get(r.Context(), h.DB, simID); err != nil {
+		if errors.Is(err, simulation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "query failed"})
+		return
+	}
+
+	var req struct {
+		Name  string `json:"name"`
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = "agent"
+	}
+
+	ctx := r.Context()
+	tx, err := h.DB.Begin(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "transaction failed"})
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var agentID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO agents (name, model) VALUES ($1, $2) RETURNING id
+	`, req.Name, req.Model).Scan(&agentID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "agent insert failed"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO portfolios (simulation_id, agent_id, cash) VALUES ($1, $2, $3)
+	`, simID, agentID, 1_000_000); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "portfolio insert failed"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "commit failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"agent_id":      agentID.String(),
+		"simulation_id": simID.String(),
+	})
 }
 
 func (h *Handler) CreateSimulation(w http.ResponseWriter, r *http.Request) {

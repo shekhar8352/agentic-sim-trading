@@ -64,6 +64,13 @@ func (c *SimClock) Tick(ctx context.Context) error {
 	})
 }
 
+// Restore rolls back in-memory clock state after a failed post-tick side effect (e.g. matching).
+func (c *SimClock) Restore(index int, date time.Time, status string) {
+	c.CurrentIndex = index
+	c.CurrentDate = date
+	c.Status = status
+}
+
 func (c *SimClock) publishEvent(ctx context.Context, event string, payload map[string]any) error {
 	if c.redis == nil {
 		return nil

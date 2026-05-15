@@ -13,24 +13,71 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// DayMatcher runs persisted order matching for one simulation trading session (Step 8).
+type DayMatcher interface {
+	ProcessSimulationDay(ctx context.Context, simulationID uuid.UUID, tradeDate time.Time) error
+}
+
 // Registry owns in-memory SimClocks and persists `simulations.as_of_date` / status (Step 7).
 type Registry struct {
-	pool   *pgxpool.Pool
-	redis  *redis.Client
-	market *market.Data
+	pool    *pgxpool.Pool
+	redis   *redis.Client
+	market  *market.Data
+	matcher DayMatcher
 
-	mu     sync.Mutex
-	clocks map[uuid.UUID]*SimClock
+	mu          sync.Mutex
+	clocks      map[uuid.UUID]*SimClock
+	orderCounts map[uuid.UUID]map[uuid.UUID]int // simulation -> agent -> submissions since last match
 }
 
 // NewRegistry constructs an empty registry; clocks are loaded on Start.
-func NewRegistry(pool *pgxpool.Pool, rdb *redis.Client, data *market.Data) *Registry {
+func NewRegistry(pool *pgxpool.Pool, rdb *redis.Client, data *market.Data, matcher DayMatcher) *Registry {
 	return &Registry{
-		pool:   pool,
-		redis:  rdb,
-		market: data,
-		clocks: make(map[uuid.UUID]*SimClock),
+		pool:        pool,
+		redis:       rdb,
+		market:      data,
+		matcher:     matcher,
+		clocks:      make(map[uuid.UUID]*SimClock),
+		orderCounts: make(map[uuid.UUID]map[uuid.UUID]int),
 	}
+}
+
+// TryAcceptOrderSubmission enforces up to 10 pending submissions per agent between processed ticks.
+func (r *Registry) TryAcceptOrderSubmission(simulationID, agentID uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.orderCounts[simulationID] == nil {
+		r.orderCounts[simulationID] = map[uuid.UUID]int{}
+	}
+	n := r.orderCounts[simulationID][agentID]
+	if n >= 10 {
+		return false
+	}
+	r.orderCounts[simulationID][agentID] = n + 1
+	return true
+}
+
+// RollbackOrderSubmission reverses one submission slot after a failed InsertPending (best-effort).
+func (r *Registry) RollbackOrderSubmission(simulationID, agentID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m := r.orderCounts[simulationID]
+	if m == nil {
+		return
+	}
+	n := m[agentID]
+	if n <= 1 {
+		delete(m, agentID)
+		if len(m) == 0 {
+			delete(r.orderCounts, simulationID)
+		}
+		return
+	}
+	m[agentID] = n - 1
+}
+
+func (r *Registry) resetOrderSubmissionWindowLocked(simulationID uuid.UUID) {
+	delete(r.orderCounts, simulationID)
 }
 
 func (r *Registry) publish(ctx context.Context, event string, payload map[string]any) error {
@@ -138,8 +185,22 @@ func (r *Registry) Tick(ctx context.Context, simulationID uuid.UUID) error {
 		return ErrNoActiveClock
 	}
 
+	prevIdx := c.CurrentIndex
+	prevDate := c.CurrentDate
+	prevStatus := c.Status
+
 	if err := c.Tick(ctx); err != nil {
 		return err
+	}
+
+	advanced := c.CurrentIndex != prevIdx
+
+	if advanced && r.matcher != nil {
+		if err := r.matcher.ProcessSimulationDay(ctx, simulationID, c.CurrentDate); err != nil {
+			c.Restore(prevIdx, prevDate, prevStatus)
+			return err
+		}
+		r.resetOrderSubmissionWindowLocked(simulationID)
 	}
 
 	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.CurrentDate, c.Status); err != nil {

@@ -23,6 +23,7 @@ func NewRouter(h *Handler) chi.Router {
 		r.Delete("/orders/{orderId}", h.CancelOrder)
 
 		r.Post("/simulations", h.CreateSimulation)
+		r.Post("/simulations/{id}/agents", h.RegisterAgent)
 		r.Get("/simulations/{id}", h.GetSimulation)
 		r.Post("/simulations/{id}/start", h.StartSimulation)
 		r.Post("/simulations/{id}/pause", h.PauseSimulation)
