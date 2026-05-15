@@ -13,6 +13,7 @@ import (
 	"github.com/agentic-sim-trading/market-simulator/internal/clock"
 	"github.com/agentic-sim-trading/market-simulator/internal/db"
 	"github.com/agentic-sim-trading/market-simulator/internal/market"
+	"github.com/agentic-sim-trading/market-simulator/internal/orderbook"
 	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
 	"github.com/agentic-sim-trading/market-simulator/internal/redisconn"
 )
@@ -32,7 +33,11 @@ func main() {
 
 	data := market.NewData(pool)
 	pm := portfolio.NewManager(pool)
-	reg := clock.NewRegistry(pool, rdb, data)
+	var matcher clock.DayMatcher
+	if pool != nil {
+		matcher = orderbook.NewEngine(pool, data, pm, rdb)
+	}
+	reg := clock.NewRegistry(pool, rdb, data, matcher)
 
 	h := &api.Handler{
 		DB:        pool,

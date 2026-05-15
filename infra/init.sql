@@ -70,8 +70,13 @@ CREATE TABLE orders (
     filled_price    NUMERIC(12,4),
     filled_at       DATE,
     rejection_reason TEXT,
+    match_on_date   DATE,
+    fees_total      NUMERIC(15,4),
+    trade_value     NUMERIC(15,4),
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX idx_orders_sim_match_pending ON orders(simulation_id, match_on_date, status)
+    WHERE status = 'pending';
 
 CREATE TABLE portfolio_snapshots (
     id              BIGSERIAL PRIMARY KEY,
