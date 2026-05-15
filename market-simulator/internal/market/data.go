@@ -105,3 +105,57 @@ func (d *Data) DistinctTradingDays(ctx context.Context, start, end time.Time) ([
 	}
 	return days, rows.Err()
 }
+
+// NextTradingDay returns the earliest global calendar date in ohlcv strictly after `day`.
+func (d *Data) NextTradingDay(ctx context.Context, day time.Time) (time.Time, error) {
+	if d.pool == nil {
+		return time.Time{}, ErrNoDatabase
+	}
+	row := d.pool.QueryRow(ctx, `
+		SELECT MIN(date) FROM ohlcv WHERE date > $1::date
+	`, day)
+	var next time.Time
+	if err := row.Scan(&next); err != nil {
+		return time.Time{}, err
+	}
+	return next.UTC(), nil
+}
+
+// BarOnDate loads OHLCV for symbol on an exact trading date.
+func (d *Data) BarOnDate(ctx context.Context, symbol string, day time.Time) (models.Quote, error) {
+	var q models.Quote
+	q.Symbol = symbol
+	if d.pool == nil {
+		return q, ErrNoDatabase
+	}
+	row := d.pool.QueryRow(ctx, `
+		SELECT date, open, high, low, close, volume
+		FROM ohlcv WHERE symbol = $1 AND date = $2::date
+	`, symbol, day)
+	var vol *int64
+	err := row.Scan(&q.Date, &q.Open, &q.High, &q.Low, &q.Close, &vol)
+	if vol != nil {
+		q.Volume = *vol
+	}
+	return q, err
+}
+
+// PrevTradingDayBar returns the latest OHLCV row strictly before `day` for the symbol.
+func (d *Data) PrevTradingDayBar(ctx context.Context, symbol string, day time.Time) (models.Quote, error) {
+	var q models.Quote
+	q.Symbol = symbol
+	if d.pool == nil {
+		return q, ErrNoDatabase
+	}
+	row := d.pool.QueryRow(ctx, `
+		SELECT date, open, high, low, close, volume
+		FROM ohlcv WHERE symbol = $1 AND date < $2::date
+		ORDER BY date DESC LIMIT 1
+	`, symbol, day)
+	var vol *int64
+	err := row.Scan(&q.Date, &q.Open, &q.High, &q.Low, &q.Close, &vol)
+	if vol != nil {
+		q.Volume = *vol
+	}
+	return q, err
+}
