@@ -59,6 +59,13 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	srv.RegisterOnShutdown(func() {
+		log.Printf("shutdown: closing Redis client")
+		if rdb != nil {
+			_ = rdb.Close()
+		}
+	})
+
 	go func() {
 		log.Printf("market-simulator listening on %s", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -69,6 +76,8 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+
+	log.Printf("shutdown: signal received, draining HTTP server...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
