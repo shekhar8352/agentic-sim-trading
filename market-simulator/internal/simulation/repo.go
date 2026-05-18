@@ -77,3 +77,41 @@ func UpdateClock(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, asOf tim
 	}
 	return nil
 }
+
+// TickSpeedMultiplier reads config.tick_speed_multiplier (default 1). Used by ops UI and orchestrator (Step 9).
+func TickSpeedMultiplier(cfg json.RawMessage) float64 {
+	if len(cfg) == 0 {
+		return 1
+	}
+	var m map[string]any
+	if err := json.Unmarshal(cfg, &m); err != nil {
+		return 1
+	}
+	x, ok := m["tick_speed_multiplier"].(float64)
+	if !ok || x <= 0 {
+		return 1
+	}
+	return x
+}
+
+// MergeConfig patches `simulations.config` with JSON merge (Step 9 sim speed).
+func MergeConfig(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fragment json.RawMessage) error {
+	if pool == nil {
+		return errors.New("database not configured")
+	}
+	if len(fragment) == 0 {
+		fragment = json.RawMessage(`{}`)
+	}
+	tag, err := pool.Exec(ctx, `
+		UPDATE simulations
+		SET config = COALESCE(config, '{}'::jsonb) || $2::jsonb
+		WHERE id = $1
+	`, id, fragment)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentic-sim-trading/market-simulator/internal/clock"
+	"github.com/agentic-sim-trading/market-simulator/internal/leaderboard"
 	"github.com/agentic-sim-trading/market-simulator/internal/market"
 	"github.com/agentic-sim-trading/market-simulator/internal/orders"
 	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
@@ -155,13 +156,21 @@ func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":             id.String(),
+		"id":            id.String(),
 		"match_on_date": matchOn.UTC().Format(time.DateOnly),
 		"status":        orders.StatusPending,
 	})
 }
 
 func (h *Handler) GetPortfolio(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	if h.Market == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "market data not configured"})
+		return
+	}
 	agentStr := chi.URLParam(r, "agentId")
 	agentID, err := uuid.Parse(agentStr)
 	if err != nil {
@@ -178,16 +187,28 @@ func (h *Handler) GetPortfolio(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation_id"})
 		return
 	}
+
+	asOf, err := h.resolvePortfolioMarkDate(r.Context(), simulationID)
+	if err != nil {
+		switch {
+		case errors.Is(err, simulation.ErrNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": err.Error()})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+		}
+		return
+	}
+
 	pm := h.Portfolio
 	if pm == nil {
 		pm = portfolio.NewManager(h.DB)
 	}
-	row, err := pm.GetPortfolio(r.Context(), simulationID, agentID)
+	detail, err := pm.GetPortfolioDetail(r.Context(), simulationID, agentID, asOf, h.Market)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "portfolio not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, row)
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func (h *Handler) resolveSimulationAsOf(ctx context.Context, simID uuid.UUID) (time.Time, error) {
@@ -207,6 +228,25 @@ func (h *Handler) resolveSimulationAsOf(ctx context.Context, simID uuid.UUID) (t
 		return *row.AsOfDate, nil
 	}
 	return time.Time{}, errSimulationNoAsOf
+}
+
+// resolvePortfolioMarkDate chooses the calendar date for MTM (clock if loaded, else DB as_of, else simulation start).
+func (h *Handler) resolvePortfolioMarkDate(ctx context.Context, simID uuid.UUID) (time.Time, error) {
+	t, err := h.resolveSimulationAsOf(ctx, simID)
+	if err == nil {
+		return t.UTC().Truncate(24 * time.Hour), nil
+	}
+	if !errors.Is(err, errSimulationNoAsOf) {
+		return time.Time{}, err
+	}
+	if h.DB == nil {
+		return time.Time{}, errors.New("database not configured")
+	}
+	row, err := simulation.Get(ctx, h.DB, simID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return row.StartDate.UTC().Truncate(24 * time.Hour), nil
 }
 
 func (h *Handler) GetQuote(w http.ResponseWriter, r *http.Request) {
@@ -486,14 +526,15 @@ func (h *Handler) GetSimulation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"id":          row.ID.String(),
-		"name":        row.Name,
-		"start_date":  row.StartDate.Format(time.DateOnly),
-		"end_date":    row.EndDate.Format(time.DateOnly),
-		"db_status":   row.Status,
-		"config":      row.Config,
-		"has_as_of":   row.AsOfDate != nil,
-		"clock_loaded": false,
+		"id":                    row.ID.String(),
+		"name":                  row.Name,
+		"start_date":            row.StartDate.Format(time.DateOnly),
+		"end_date":              row.EndDate.Format(time.DateOnly),
+		"db_status":             row.Status,
+		"config":                row.Config,
+		"tick_speed_multiplier": simulation.TickSpeedMultiplier(row.Config),
+		"has_as_of":             row.AsOfDate != nil,
+		"clock_loaded":          false,
 	}
 	if row.AsOfDate != nil {
 		out["as_of_date"] = row.AsOfDate.Format(time.DateOnly)
@@ -562,10 +603,71 @@ func (h *Handler) TickSimulation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "tick"})
 }
 
-func (h *Handler) PutSimSpeed(w http.ResponseWriter, _ *http.Request) {
-	notImplemented(w, "PUT /api/v1/sim/speed — scheduling multiplier (future)")
+func (h *Handler) PutSimSpeed(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	var req struct {
+		SimulationID uuid.UUID `json:"simulation_id"`
+		Multiplier   float64   `json:"multiplier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid JSON body"})
+		return
+	}
+	if req.SimulationID == uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "simulation_id required"})
+		return
+	}
+	if req.Multiplier <= 0 || req.Multiplier > 86400 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "multiplier must be in (0, 86400]"})
+		return
+	}
+	patch, err := json.Marshal(map[string]float64{"tick_speed_multiplier": req.Multiplier})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "encode failed"})
+		return
+	}
+	if err := simulation.MergeConfig(r.Context(), h.DB, req.SimulationID, patch); err != nil {
+		if errors.Is(err, simulation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "update failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"simulation_id":         req.SimulationID.String(),
+		"tick_speed_multiplier": req.Multiplier,
+	})
 }
 
-func (h *Handler) GetLeaderboard(w http.ResponseWriter, _ *http.Request) {
-	notImplemented(w, "GET /api/v1/leaderboard/{simId} — rankings (Step 9)")
+func (h *Handler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	simID, err := uuid.Parse(chi.URLParam(r, "simId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation id"})
+		return
+	}
+	if _, err := simulation.Get(r.Context(), h.DB, simID); err != nil {
+		if errors.Is(err, simulation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "query failed"})
+		return
+	}
+	entries, err := leaderboard.Build(r.Context(), h.DB, simID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "leaderboard failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"simulation_id": simID.String(),
+		"entries":       entries,
+	})
 }

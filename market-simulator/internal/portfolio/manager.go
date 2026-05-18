@@ -16,7 +16,7 @@ func NewManager(pool *pgxpool.Pool) *Manager {
 	return &Manager{pool: pool}
 }
 
-// PortfolioRow is a minimal read model for GET /portfolio/:agentId.
+// PortfolioRow is a minimal cash-only read model (see GetPortfolioDetail for Step 9 agent API).
 type PortfolioRow struct {
 	SimulationID uuid.UUID `json:"simulation_id"`
 	AgentID      uuid.UUID `json:"agent_id"`
