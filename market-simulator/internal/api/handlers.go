@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentic-sim-trading/market-simulator/internal/agents"
 	"github.com/agentic-sim-trading/market-simulator/internal/clock"
 	"github.com/agentic-sim-trading/market-simulator/internal/leaderboard"
 	"github.com/agentic-sim-trading/market-simulator/internal/market"
 	"github.com/agentic-sim-trading/market-simulator/internal/orders"
 	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
 	"github.com/agentic-sim-trading/market-simulator/internal/simulation"
-	"github.com/agentic-sim-trading/market-simulator/internal/universe"
+	"github.com/agentic-sim-trading/market-simulator/internal/validation"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -112,20 +113,11 @@ func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "simulation_id and agent_id required"})
 		return
 	}
-	if req.Symbol == "" || req.Side == "" || req.OrderType == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "symbol, side, order_type required"})
+	if agentAccessDeniedFromRequest(w, r, req.AgentID) {
 		return
 	}
-	if req.OrderType != "market" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "only market orders supported in phase 1"})
-		return
-	}
-	if req.Quantity <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "quantity must be positive"})
-		return
-	}
-	if !universe.IsNifty50(req.Symbol) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "symbol must be a Nifty 50 listing (.NS)"})
+	if err := validation.MarketOrder(req.Symbol, req.OrderType, req.Side, req.Quantity); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
 		return
 	}
 
@@ -175,6 +167,9 @@ func (h *Handler) GetPortfolio(w http.ResponseWriter, r *http.Request) {
 	agentID, err := uuid.Parse(agentStr)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid agent id"})
+		return
+	}
+	if agentAccessDeniedFromRequest(w, r, agentID) {
 		return
 	}
 	simStr := r.URL.Query().Get("simulation_id")
@@ -251,6 +246,10 @@ func (h *Handler) resolvePortfolioMarkDate(ctx context.Context, simID uuid.UUID)
 
 func (h *Handler) GetQuote(w http.ResponseWriter, r *http.Request) {
 	symbol := chi.URLParam(r, "symbol")
+	if err := validation.ListedSymbol(symbol); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+		return
+	}
 	data := market.NewData(h.DB)
 	qp := market.NewQuoteProvider(data)
 	if sid := r.URL.Query().Get("simulation_id"); sid != "" {
@@ -291,6 +290,10 @@ func (h *Handler) GetQuote(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetOHLCV(w http.ResponseWriter, r *http.Request) {
 	symbol := chi.URLParam(r, "symbol")
+	if err := validation.ListedSymbol(symbol); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+		return
+	}
 	days := 20
 	if d := r.URL.Query().Get("days"); d != "" {
 		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 500 {
@@ -345,6 +348,9 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid agent id"})
 		return
 	}
+	if agentAccessDeniedFromRequest(w, r, agentID) {
+		return
+	}
 	simStr := r.URL.Query().Get("simulation_id")
 	if simStr == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "query simulation_id required"})
@@ -388,6 +394,18 @@ func (h *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
 	simulationID, err := uuid.Parse(simStr)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation_id"})
+		return
+	}
+	ownerID, pending, err := orders.PendingOrderAgentID(r.Context(), h.DB, simulationID, orderID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "lookup failed"})
+		return
+	}
+	if !pending {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "pending order not found"})
+		return
+	}
+	if agentAccessDeniedFromRequest(w, r, ownerID) {
 		return
 	}
 	ok, err := orders.CancelPending(r.Context(), h.DB, simulationID, orderID)
@@ -441,10 +459,21 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	plainKey, err := agents.GenerateAPIKey()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "api key generation failed"})
+		return
+	}
+	hash, err := agents.HashAPIKey(plainKey)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "api key hash failed"})
+		return
+	}
+
 	var agentID uuid.UUID
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO agents (name, model) VALUES ($1, $2) RETURNING id
-	`, req.Name, req.Model).Scan(&agentID); err != nil {
+		INSERT INTO agents (name, model, api_key_hash) VALUES ($1, $2, $3) RETURNING id
+	`, req.Name, req.Model, hash).Scan(&agentID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "agent insert failed"})
 		return
 	}
@@ -462,6 +491,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"agent_id":      agentID.String(),
 		"simulation_id": simID.String(),
+		"api_key":       plainKey,
 	})
 }
 
