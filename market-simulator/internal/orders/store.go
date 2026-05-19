@@ -2,6 +2,7 @@ package orders
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,15 +16,15 @@ const StatusRejected = "rejected"
 const StatusCanceled = "canceled"
 
 type Row struct {
-	ID            uuid.UUID
-	SimulationID  uuid.UUID
-	AgentID       uuid.UUID
-	Symbol        string
-	OrderType     string
-	Side          string
-	Quantity      int
-	MatchOnDate   time.Time
-	CreatedAt     time.Time
+	ID           uuid.UUID
+	SimulationID uuid.UUID
+	AgentID      uuid.UUID
+	Symbol       string
+	OrderType    string
+	Side         string
+	Quantity     int
+	MatchOnDate  time.Time
+	CreatedAt    time.Time
 }
 
 func InsertPending(ctx context.Context, pool *pgxpool.Pool, simulationID, agentID uuid.UUID, symbol, orderType, side string, quantity int, matchOnDate time.Time) (uuid.UUID, error) {
@@ -100,6 +101,22 @@ func CancelPending(ctx context.Context, pool *pgxpool.Pool, simulationID, orderI
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// PendingOrderAgentID returns the owning agent for a pending order, if any.
+func PendingOrderAgentID(ctx context.Context, pool *pgxpool.Pool, simulationID, orderID uuid.UUID) (uuid.UUID, bool, error) {
+	var aid uuid.UUID
+	err := pool.QueryRow(ctx, `
+		SELECT agent_id FROM orders
+		WHERE id = $1 AND simulation_id = $2 AND status = $3
+	`, orderID, simulationID, StatusPending).Scan(&aid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	return aid, true, nil
 }
 
 func ListByAgent(ctx context.Context, pool *pgxpool.Pool, simulationID, agentID uuid.UUID, limit int) ([]map[string]any, error) {

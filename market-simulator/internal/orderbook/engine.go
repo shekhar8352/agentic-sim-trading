@@ -148,12 +148,12 @@ func (e *Engine) ProcessSimulationDay(ctx context.Context, simulationID uuid.UUI
 				return err
 			}
 			redisPayloads = append(redisPayloads, map[string]any{
-				"event":          "order.rejected",
-				"order_id":       o.ID.String(),
-				"simulation_id":  simulationID.String(),
-				"agent_id":       o.AgentID.String(),
-				"symbol":         o.Symbol,
-				"reason":         reason,
+				"event":         "order.rejected",
+				"order_id":      o.ID.String(),
+				"simulation_id": simulationID.String(),
+				"agent_id":      o.AgentID.String(),
+				"symbol":        o.Symbol,
+				"reason":        reason,
 				"match_on_date": tradeDate.UTC().Format(time.DateOnly),
 			})
 		}
@@ -315,16 +315,16 @@ func (e *Engine) fillBuy(
 		return "persist_error"
 	}
 	*redisPayloads = append(*redisPayloads, map[string]any{
-		"event":          "order.filled",
-		"order_id":       o.ID.String(),
-		"simulation_id":  simulationID.String(),
-		"agent_id":       o.AgentID.String(),
-		"symbol":         o.Symbol,
-		"side":           "buy",
-		"quantity":       o.Quantity,
-		"filled_price":   open,
-		"fees_total":     feeTotal,
-		"trade_value":    tradeVal,
+		"event":         "order.filled",
+		"order_id":      o.ID.String(),
+		"simulation_id": simulationID.String(),
+		"agent_id":      o.AgentID.String(),
+		"symbol":        o.Symbol,
+		"side":          "buy",
+		"quantity":      o.Quantity,
+		"filled_price":  open,
+		"fees_total":    feeTotal,
+		"trade_value":   tradeVal,
 		"match_on_date": tradeDate.UTC().Format(time.DateOnly),
 	})
 	return ""
@@ -368,17 +368,17 @@ func (e *Engine) fillSell(
 		return "persist_error"
 	}
 	*redisPayloads = append(*redisPayloads, map[string]any{
-		"event":          "order.filled",
-		"order_id":       o.ID.String(),
-		"simulation_id":  simulationID.String(),
-		"agent_id":       o.AgentID.String(),
-		"symbol":         o.Symbol,
-		"side":           "sell",
-		"quantity":       o.Quantity,
-		"filled_price":   open,
-		"fees_total":     feeTotal,
-		"trade_value":    tradeVal,
-		"net_credit":     credit,
+		"event":         "order.filled",
+		"order_id":      o.ID.String(),
+		"simulation_id": simulationID.String(),
+		"agent_id":      o.AgentID.String(),
+		"symbol":        o.Symbol,
+		"side":          "sell",
+		"quantity":      o.Quantity,
+		"filled_price":  open,
+		"fees_total":    feeTotal,
+		"trade_value":   tradeVal,
+		"net_credit":    credit,
 		"match_on_date": tradeDate.UTC().Format(time.DateOnly),
 	})
 	return ""
