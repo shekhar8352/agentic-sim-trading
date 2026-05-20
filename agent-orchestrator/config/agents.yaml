@@ -1,0 +1,25 @@
+# Agent orchestrator configuration (roadmap Step 11).
+# After registering agents via POST /api/v1/simulations/{id}/agents, set agent_id and api_key per entry.
+
+go_service_url: http://localhost:8070
+
+simulation_id: null  # UUID string when running a sim
+
+agents:
+  - name: demo-claude
+    provider: claude
+    model: claude-sonnet-4-20250514
+    agent_id: null
+    api_key: null
+
+  - name: demo-gpt
+    provider: gpt
+    model: gpt-4o
+    agent_id: null
+    api_key: null
+
+  - name: demo-rules
+    provider: custom
+    model: momentum-v1
+    agent_id: null
+    api_key: null
