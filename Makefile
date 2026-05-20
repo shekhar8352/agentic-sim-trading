@@ -66,4 +66,4 @@ go-mod-tidy:
 	cd market-simulator && go mod tidy
 
 lint-orchestrator:
-	cd agent-orchestrator && ruff check app
+	cd agent-orchestrator && ruff check app orchestrator agents market_client prompts analytics tests
