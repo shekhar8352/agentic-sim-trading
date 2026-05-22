@@ -74,8 +74,28 @@ Built by `infra/docker-compose.yml` as service `agent-orchestrator`. From repo r
 
 ## Next steps
 
-- **Step 13**: Implement `build_context` / `decide` on LLM agents (uses `MarketClient.get_portfolio`, `get_ohlcv`).
-- **Step 14**: Wire `AgentRunner` + `SimulationEventListener` to simulation ticks.
+- **Step 14**: Wire `AgentRunner` + `SimulationEventListener` to Redis simulation ticks.
+
+### Agents (Step 13)
+
+| Class | Provider | Notes |
+|-------|----------|-------|
+| `ClaudeAgent` | `claude` | Async Anthropic API |
+| `GPTAgent` | `gpt` / `openai` | Async OpenAI API |
+| `GeminiAgent` | `gemini` | Requires `pip install -e '.[llm]'` |
+| `CustomAgent` | `custom` | Momentum rule-based baseline |
+
+`BaseAgent.run_turn(date)` builds context (portfolio + top-10 Nifty OHLCV), calls `decide()`, and submits up to 10 orders via `MarketClient`.
+
+```python
+from agents import create_agent
+from app.config_loader import load_agents_config
+
+cfg = load_agents_config("config/agents.yaml")
+entry = cfg.agents[0]
+agent = create_agent(entry.agent_id, cfg.simulation_id, entry, cfg.go_service_url)
+await agent.run_turn("2024-01-15")
+```
 
 ### Market client (Step 12)
 
