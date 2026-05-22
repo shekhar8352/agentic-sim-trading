@@ -18,6 +18,6 @@ class AgentRunner:
         results: list[dict[str, Any]] = []
         for agent in self.agents:
             logger.info("agent turn agent_id=%s date=%s", agent.agent_id, current_date)
-            decision = await agent.act(current_date)
-            results.append({"agent_id": agent.agent_id, "decision": decision})
+            placed = await agent.run_turn(current_date)
+            results.append({"agent_id": agent.agent_id, "orders": placed})
         return results
