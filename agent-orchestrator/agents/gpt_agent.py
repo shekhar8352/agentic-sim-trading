@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from agents.base_agent import BaseAgent
+from openai import AsyncOpenAI
+
+from agents.llm_agent import LLMAgent
 
 
-class GPTAgent(BaseAgent):
-    """OpenAI GPT-backed agent (Step 13)."""
+class GPTAgent(LLMAgent):
+    """OpenAI GPT-backed trading agent."""
 
-    async def build_context(self, current_date: str) -> str:
-        raise NotImplementedError("GPTAgent.build_context — implement in Step 13")
+    def __init__(self, agent_id: str, sim_id: str, config: dict[str, Any]):
+        super().__init__(agent_id, sim_id, config)
+        api_key = config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+        self.model = config.get("model", "gpt-4o")
+        self.llm = AsyncOpenAI(api_key=api_key) if api_key else AsyncOpenAI()
 
-    async def decide(self, context: str) -> dict[str, Any]:
-        raise NotImplementedError("GPTAgent.decide — implement in Step 13")
+    async def complete(self, context: str) -> str:
+        response = await self.llm.chat.completions.create(
+            model=self.model,
+            max_tokens=int(self.config.get("max_tokens", 1000)),
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": context},
+            ],
+        )
+        return response.choices[0].message.content or "[]"
