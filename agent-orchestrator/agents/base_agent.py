@@ -17,6 +17,7 @@ class BaseAgent(ABC):
             config["go_service_url"],
             agent_id,
             config["api_key"],
+            simulation_id=sim_id,
         )
 
     @abstractmethod
