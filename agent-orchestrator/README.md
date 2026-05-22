@@ -74,6 +74,29 @@ Built by `infra/docker-compose.yml` as service `agent-orchestrator`. From repo r
 
 ## Next steps
 
-- **Step 12**: Harden `market_client` (errors, quotes, cancel, list orders).
-- **Step 13**: Implement `build_context` / `decide` on LLM agents.
+- **Step 13**: Implement `build_context` / `decide` on LLM agents (uses `MarketClient.get_portfolio`, `get_ohlcv`).
 - **Step 14**: Wire `AgentRunner` + `SimulationEventListener` to simulation ticks.
+
+### Market client (Step 12)
+
+`market_client.MarketClient` wraps all **agent-authenticated** Go routes:
+
+| Method | Go endpoint |
+|--------|-------------|
+| `get_portfolio()` | `GET /api/v1/portfolio/{agent_id}` |
+| `get_quote(symbol)` | `GET /api/v1/market/quote/{symbol}` |
+| `get_ohlcv(symbol, days=30)` | `GET /api/v1/market/ohlcv/{symbol}` |
+| `list_orders(limit=100)` | `GET /api/v1/orders/{agent_id}` |
+| `place_order(order)` | `POST /api/v1/orders` |
+| `cancel_order(order_id)` | `DELETE /api/v1/orders/{order_id}` |
+| `health()` | `GET /health` (no auth) |
+
+Pass `simulation_id` at construction (as `BaseAgent` does) or per call. Errors raise `APIError` with `status_code` and `detail` from the simulator JSON body.
+
+```python
+from market_client import MarketClient, Order
+
+async with MarketClient(base_url, agent_id, api_key, simulation_id=sim_id) as client:
+    portfolio = await client.get_portfolio()
+    await client.place_order(Order(symbol="TCS.NS", side="buy", quantity=1))
+```
