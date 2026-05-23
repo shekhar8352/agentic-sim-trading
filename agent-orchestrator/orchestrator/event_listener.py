@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class SimulationEventListener:
-    """Subscribe to market-simulator events published on Redis (Step 11 scaffold)."""
+    """Subscribe to market-simulator JSON events on Redis (default channel ``sim.events``)."""
 
-    def __init__(self, redis_url: str, channel: str = "sim:events"):
+    def __init__(self, redis_url: str, channel: str = "sim.events"):
         self.redis_url = redis_url
         self.channel = channel
 
