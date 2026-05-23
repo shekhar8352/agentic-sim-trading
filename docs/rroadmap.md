@@ -668,6 +668,8 @@ class ClaudeAgent(BaseAgent):
 
 ### Step 14: Build the Orchestrator (Redis Event Loop)
 
+> **Implementation note:** The Go market-simulator publishes JSON on Redis channel **`sim.events`** with an **`event`** field (`sim.tick`, `sim.completed`, `sim.started`, …). The Python `SimulationRunner` subscribes to that channel (not separate `sim.tick` / `sim.completed` channel names).
+
 ```python
 # orchestrator/runner.py
 import redis.asyncio as redis

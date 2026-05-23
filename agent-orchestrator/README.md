@@ -7,7 +7,7 @@ Runs AI agents, manages prompts, and talks to the Go **market-simulator** servic
 ```
 agent-orchestrator/
 ├── app/                    # FastAPI app, settings, YAML config loader
-├── orchestrator/           # Runner, scheduler, Redis event listener
+├── orchestrator/           # SimulationRunner (Redis), AgentRunner, scheduler, listener
 ├── agents/                 # Base + Claude / GPT / Gemini / custom stubs
 ├── market_client/          # HTTP client for Go API (Step 12)
 ├── prompts/                # System prompt + context templates
@@ -72,9 +72,17 @@ python scripts/ingest_data.py
 
 Built by `infra/docker-compose.yml` as service `agent-orchestrator`. From repo root: `make up`.
 
-## Next steps
+## Redis orchestrator (Step 14)
 
-- **Step 14**: Wire `AgentRunner` + `SimulationEventListener` to Redis simulation ticks.
+The Go market-simulator publishes JSON on Redis channel **`sim.events`** (field **`event`**: `sim.tick`, `sim.completed`, …). `SimulationRunner` subscribes, filters by `simulation_id` from `config/agents.yaml`, and runs **`asyncio.gather`** over all agents on each `sim.tick`. When `sim.completed` arrives for that simulation, the runner stops (configurable via `stop_on_completed`).
+
+From `agent-orchestrator/` after setting `REDIS_URL`, `simulation_id`, and agent credentials in `config/agents.yaml`:
+
+```bash
+python -m orchestrator
+```
+
+Use `AgentRunner` when you want a **sequential** manual loop (tests); use `SimulationRunner` for the live Redis-driven loop.
 
 ### Agents (Step 13)
 
