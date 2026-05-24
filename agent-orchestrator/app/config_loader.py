@@ -9,10 +9,13 @@ from pydantic import BaseModel, Field
 
 class AgentEntry(BaseModel):
     name: str
-    provider: str  # claude | gpt | gemini | custom
+    provider: str  # claude | gpt | gemini | ollama | custom
     model: str
     agent_id: str | None = None
     api_key: str | None = None
+    ollama_base_url: str | None = None
+    ollama_timeout_seconds: float | None = None
+    system_prompt: str | None = None
 
 
 class AgentsConfig(BaseModel):

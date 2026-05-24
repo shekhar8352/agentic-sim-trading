@@ -18,6 +18,14 @@ class Settings(BaseSettings):
 
     agents_config_path: str = "config/agents.yaml"
 
+    # Local Ollama (Phase 4 / Step 15 testing)
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "gemma3:270m"
+
+    # Step 16 — resilience tuning
+    redis_reconnect_base_seconds: float = 1.0
+    redis_reconnect_max_delay_seconds: float = 60.0
+
 
 @lru_cache
 def get_settings() -> Settings:
