@@ -6,7 +6,7 @@ from typing import Any
 
 from agents.universe import NIFTY_50
 from market_client.client import MarketClient
-from market_client.errors import APIError
+from market_client.errors import APIError, MarketClientError
 from market_client.models import Order
 from prompts.templates import build_trading_context
 
@@ -38,13 +38,25 @@ class BaseAgent(ABC):
         return NIFTY_50[:count]
 
     async def build_context(self, current_date: str) -> str:
-        portfolio = await self.client.get_portfolio()
-        market_data: dict[str, list[dict]] = {}
-        for symbol in self._watchlist():
-            market_data[symbol] = await self.client.get_ohlcv(symbol, days=20)
+        try:
+            portfolio = await self.client.get_portfolio()
+            market_data: dict[str, list[dict]] = {}
+            for symbol in self._watchlist():
+                market_data[symbol] = await self.client.get_ohlcv(symbol, days=20)
 
-        self._last_portfolio = portfolio
-        self._last_market_data = market_data
+            self._last_portfolio = portfolio
+            self._last_market_data = market_data
+        except MarketClientError as exc:
+            if self._last_portfolio:
+                logger.warning(
+                    "agent=%s market fetch failed (%s), using cached context",
+                    self.agent_id,
+                    exc,
+                )
+                portfolio = self._last_portfolio
+                market_data = self._last_market_data
+            else:
+                raise
         return build_trading_context(current_date, portfolio, market_data)
 
     @abstractmethod
@@ -52,8 +64,26 @@ class BaseAgent(ABC):
         """Return orders to place this turn (empty list = hold)."""
 
     async def run_turn(self, current_date: str) -> list[dict[str, Any]]:
-        context = await self.build_context(current_date)
-        orders = await self.decide(context)
+        try:
+            context = await self.build_context(current_date)
+        except MarketClientError as exc:
+            logger.warning(
+                "agent=%s skip turn: cannot build context (%s)",
+                self.agent_id,
+                exc,
+            )
+            return []
+
+        try:
+            orders = await self.decide(context)
+        except Exception as exc:
+            logger.warning(
+                "agent=%s skip turn: decide failed (%s)",
+                self.agent_id,
+                exc,
+            )
+            return []
+
         results: list[dict[str, Any]] = []
 
         for order in orders[: self.max_orders_per_turn]:
@@ -68,7 +98,7 @@ class BaseAgent(ABC):
                 results.append({"order": order.model_dump(), "result": result})
             except APIError as exc:
                 logger.warning(
-                    "agent=%s order=%s error=%s",
+                    "agent=%s order=%s rejected error=%s",
                     self.agent_id,
                     order.model_dump(),
                     exc.detail,
@@ -78,6 +108,19 @@ class BaseAgent(ABC):
                         "order": order.model_dump(),
                         "error": exc.detail,
                         "status_code": exc.status_code,
+                    }
+                )
+            except MarketClientError as exc:
+                logger.warning(
+                    "agent=%s order=%s transport error=%s",
+                    self.agent_id,
+                    order.model_dump(),
+                    exc,
+                )
+                results.append(
+                    {
+                        "order": order.model_dump(),
+                        "error": str(exc),
                     }
                 )
         return results
