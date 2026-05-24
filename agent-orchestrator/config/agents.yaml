@@ -1,5 +1,7 @@
 # Agent orchestrator configuration (roadmap Step 11).
 # After registering agents via POST /api/v1/simulations/{id}/agents, set agent_id and api_key per entry.
+#
+# Ollama (Step 15): provider: ollama, model e.g. gemma4:latest, optional ollama_base_url.
 
 go_service_url: http://localhost:8070
 

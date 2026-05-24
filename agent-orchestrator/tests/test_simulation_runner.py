@@ -67,7 +67,9 @@ async def test_handle_tick_runs_agents_concurrently():
 
 @pytest.mark.asyncio
 async def test_completion_sets_stop_when_filtered():
-    runner = SimulationRunner([], "redis://localhost", simulation_id="sim-A", stop_on_completed=True)
+    runner = SimulationRunner(
+        [], "redis://localhost", simulation_id="sim-A", stop_on_completed=True
+    )
     assert not runner._stop_requested
     await runner.dispatch_event({"event": "sim.completed", "simulation_id": "sim-A"})
     assert runner._stop_requested
@@ -75,6 +77,8 @@ async def test_completion_sets_stop_when_filtered():
 
 @pytest.mark.asyncio
 async def test_completion_does_not_stop_for_other_sim_when_filtered():
-    runner = SimulationRunner([], "redis://localhost", simulation_id="sim-A", stop_on_completed=True)
+    runner = SimulationRunner(
+        [], "redis://localhost", simulation_id="sim-A", stop_on_completed=True
+    )
     await runner.dispatch_event({"event": "sim.completed", "simulation_id": "sim-B"})
     assert not runner._stop_requested

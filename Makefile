@@ -25,8 +25,8 @@ help:
 	@echo "  make go-test         go test ./... in market-simulator"
 	@echo "  make go-mod-tidy     go mod tidy in market-simulator"
 	@echo "  make lint-orchestrator   ruff check agent-orchestrator (after install)"
-
-up:
+	@echo ""
+	@echo '  Phase 4 Step 15 (pytest, opt-in): RUN_PHASE4_INTEGRATION=1 pytest agent-orchestrator/tests/integration/'
 	$(COMPOSE) up --build
 
 down:

@@ -54,3 +54,6 @@ select = ["E", "F", "I"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: Phase 4 end-to-end checks (Postgres + Redis + market-simulator)",
+]
