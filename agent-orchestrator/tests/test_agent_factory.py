@@ -12,3 +12,17 @@ def test_create_custom_agent():
     )
     agent = create_agent(entry.agent_id, "sim-id", entry, "http://localhost:8070")
     assert agent.__class__.__name__ == "CustomAgent"
+
+
+def test_create_gpt_agent_with_custom_prompt():
+    entry = {
+        "name": "gpt",
+        "provider": "gpt",
+        "model": "gpt-4.1-nano",
+        "agent_id": "00000000-0000-4000-8000-000000000002",
+        "api_key": "secret",
+        "system_prompt": "Trade aggressively.",
+    }
+    agent = create_agent(entry["agent_id"], "sim-id", entry, "http://localhost:8070")
+    assert agent.system_prompt == "Trade aggressively."
+
