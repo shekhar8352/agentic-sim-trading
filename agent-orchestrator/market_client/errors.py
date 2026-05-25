@@ -18,3 +18,11 @@ class APIError(MarketClientError):
 
 class ConfigurationError(MarketClientError):
     """Missing required client configuration (e.g. simulation_id)."""
+
+
+class TransportError(MarketClientError):
+    """Network or timeout failure talking to the simulator."""
+
+    def __init__(self, message: str, *, cause: BaseException | None = None):
+        self.cause = cause
+        super().__init__(message)

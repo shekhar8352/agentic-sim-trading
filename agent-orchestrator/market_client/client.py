@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from market_client.errors import APIError, ConfigurationError
+from market_client.errors import APIError, ConfigurationError, TransportError
 from market_client.models import Order
 
 
@@ -89,7 +89,12 @@ class MarketClient:
     ) -> Any:
         client = await self._ensure_client()
         headers = self.headers if auth else None
-        response = await client.request(method, path, params=params, json=json, headers=headers)
+        try:
+            response = await client.request(method, path, params=params, json=json, headers=headers)
+        except httpx.TimeoutException as exc:
+            raise TransportError(f"{method} {path} timed out", cause=exc) from exc
+        except httpx.TransportError as exc:
+            raise TransportError(f"{method} {path} transport error: {exc}", cause=exc) from exc
         if response.is_error:
             raise APIError(response.status_code, _parse_error_detail(response))
         if response.status_code == 204 or not response.content:
