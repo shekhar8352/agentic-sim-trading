@@ -39,6 +39,10 @@ func main() {
 	}
 	reg := clock.NewRegistry(pool, rdb, data, matcher)
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go reg.RunAutoTicker(ctx)
+
 	h := &api.Handler{
 		DB:        pool,
 		Redis:     rdb,
@@ -76,6 +80,8 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+
+	cancel()
 
 	log.Printf("shutdown: signal received, draining HTTP server...")
 

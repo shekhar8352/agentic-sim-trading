@@ -59,6 +59,8 @@ func writeSimErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"detail": err.Error()})
 	case errors.Is(err, clock.ErrDatabaseRequired):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": err.Error()})
+	case errors.Is(err, clock.ErrNotAwaitingProceed):
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "internal error"})
 	}
@@ -556,15 +558,20 @@ func (h *Handler) GetSimulation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"id":                    row.ID.String(),
-		"name":                  row.Name,
-		"start_date":            row.StartDate.Format(time.DateOnly),
-		"end_date":              row.EndDate.Format(time.DateOnly),
-		"db_status":             row.Status,
-		"config":                row.Config,
-		"tick_speed_multiplier": simulation.TickSpeedMultiplier(row.Config),
-		"has_as_of":             row.AsOfDate != nil,
-		"clock_loaded":          false,
+		"id":                       row.ID.String(),
+		"name":                     row.Name,
+		"start_date":               row.StartDate.Format(time.DateOnly),
+		"end_date":                 row.EndDate.Format(time.DateOnly),
+		"db_status":                row.Status,
+		"config":                   row.Config,
+		"tick_speed_multiplier":    simulation.TickSpeedMultiplier(row.Config),
+		"checkpoint_interval_days": simulation.CheckpointIntervalDays(row.Config),
+		"days_since_checkpoint":    simulation.DaysSinceCheckpoint(row.Config),
+		"awaiting_proceed":         simulation.AwaitingProceed(row.Config),
+		"auto_tick_enabled":        simulation.AutoTickEnabled(row.Config),
+		"tick_interval_seconds":    simulation.TickIntervalSeconds(row.Config),
+		"has_as_of":                row.AsOfDate != nil,
+		"clock_loaded":             false,
 	}
 	if row.AsOfDate != nil {
 		out["as_of_date"] = row.AsOfDate.Format(time.DateOnly)
@@ -613,6 +620,55 @@ func (h *Handler) PauseSimulation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "paused"})
+}
+
+func (h *Handler) ProceedSimulation(w http.ResponseWriter, r *http.Request) {
+	if h.Clocks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "clock registry not configured"})
+		return
+	}
+	simID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation id"})
+		return
+	}
+	if err := h.Clocks.Proceed(r.Context(), simID); err != nil {
+		writeSimErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "proceeded"})
+}
+
+func (h *Handler) PatchSimulationConfig(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "DATABASE_URL required"})
+		return
+	}
+	simID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid simulation id"})
+		return
+	}
+	var req struct {
+		Config json.RawMessage `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid JSON body"})
+		return
+	}
+	if len(req.Config) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "config object required"})
+		return
+	}
+	if err := simulation.MergeConfig(r.Context(), h.DB, simID, req.Config); err != nil {
+		if errors.Is(err, simulation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "update failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "updated"})
 }
 
 // TickSimulation advances the virtual calendar by one trading day (Step 7 operational hook).
