@@ -66,6 +66,8 @@ async def _async_main() -> None:
         agents,
         settings.redis_url,
         simulation_id=cfg.simulation_id,
+        redis_reconnect_base_seconds=settings.redis_reconnect_base_seconds,
+        redis_reconnect_max_delay_seconds=settings.redis_reconnect_max_delay_seconds,
     )
     logging.info(
         "starting orchestrator simulation_id=%s market_simulator=%s agents=%d",

@@ -8,8 +8,12 @@ from typing import Any
 import redis.asyncio as redis
 
 from agents.base_agent import BaseAgent
+from orchestrator.resilience import compute_backoff_delay
 
 logger = logging.getLogger(__name__)
+
+_REDIS_RECONNECT_BASE_SECONDS = 1.0
+_REDIS_RECONNECT_MAX_DELAY_SECONDS = 60.0
 
 
 class AgentRunner:
@@ -42,12 +46,16 @@ class SimulationRunner:
         channel: str = "sim.events",
         simulation_id: str | None = None,
         stop_on_completed: bool = True,
+        redis_reconnect_base_seconds: float = _REDIS_RECONNECT_BASE_SECONDS,
+        redis_reconnect_max_delay_seconds: float = _REDIS_RECONNECT_MAX_DELAY_SECONDS,
     ):
         self.agents = list(agents)
         self.redis_url = redis_url
         self.channel = channel
         self.simulation_id = simulation_id
         self.stop_on_completed = stop_on_completed
+        self.redis_reconnect_base_seconds = redis_reconnect_base_seconds
+        self.redis_reconnect_max_delay_seconds = redis_reconnect_max_delay_seconds
         self._stop_requested = False
 
     def _matches_sim(self, payload: dict[str, Any]) -> bool:
@@ -94,21 +102,41 @@ class SimulationRunner:
         if self.stop_on_completed and self._matches_sim(data):
             self._stop_requested = True
 
+    async def handle_resumed(self, data: dict[str, Any]) -> None:
+        logger.info(
+            "sim.resumed simulation_id=%s date=%s — continuing from Go saved state",
+            data.get("simulation_id"),
+            data.get("date"),
+        )
+
     async def dispatch_event(self, payload: dict[str, Any]) -> None:
         """Handle one decoded Redis payload (used by tests and optional callers)."""
-        if not self._matches_sim(payload):
-            return
-        event = payload.get("event")
-        if event == "sim.tick":
-            await self.handle_tick(payload)
-        elif event == "sim.completed":
-            await self.handle_completion(payload)
-        elif event in ("sim.started", "sim.resumed", "sim.tick.processed"):
-            logger.debug("lifecycle/event note: %s", event)
-        else:
-            logger.debug("unhandled event: %s", event)
+        try:
+            if not self._matches_sim(payload):
+                return
+            event = payload.get("event")
+            if event == "sim.tick":
+                await self.handle_tick(payload)
+            elif event == "sim.completed":
+                await self.handle_completion(payload)
+            elif event == "sim.resumed":
+                await self.handle_resumed(payload)
+            elif event == "sim.checkpoint":
+                logger.info(
+                    "sim.checkpoint simulation_id=%s date=%s days=%s interval=%s — paused until user proceeds",
+                    payload.get("simulation_id"),
+                    payload.get("date"),
+                    payload.get("days_since_checkpoint"),
+                    payload.get("checkpoint_interval_days"),
+                )
+            elif event in ("sim.started", "sim.tick.processed"):
+                logger.debug("lifecycle/event note: %s", event)
+            else:
+                logger.debug("unhandled event: %s", event)
+        except Exception:
+            logger.exception("dispatch_event failed payload=%s", payload)
 
-    async def start(self) -> None:
+    async def _listen_once(self) -> None:
         client = redis.from_url(self.redis_url, decode_responses=True)
         pubsub = client.pubsub()
         await pubsub.subscribe(self.channel)
@@ -141,4 +169,40 @@ class SimulationRunner:
             await pubsub.unsubscribe(self.channel)
             await pubsub.aclose()
             await client.aclose()
-            logger.info("orchestrator stopped")
+
+    async def start(self) -> None:
+        attempt = 0
+        while not self._stop_requested:
+            try:
+                await self._listen_once()
+                break
+            except asyncio.CancelledError:
+                raise
+            except (redis.ConnectionError, redis.TimeoutError, OSError) as exc:
+                attempt += 1
+                delay = compute_backoff_delay(
+                    attempt,
+                    base_seconds=self.redis_reconnect_base_seconds,
+                    max_delay_seconds=self.redis_reconnect_max_delay_seconds,
+                )
+                logger.warning(
+                    "redis connection lost (%s), reconnecting in %.1fs (attempt %d)",
+                    exc,
+                    delay,
+                    attempt,
+                )
+                await asyncio.sleep(delay)
+            except Exception:
+                attempt += 1
+                delay = compute_backoff_delay(
+                    attempt,
+                    base_seconds=self.redis_reconnect_base_seconds,
+                    max_delay_seconds=self.redis_reconnect_max_delay_seconds,
+                )
+                logger.exception(
+                    "orchestrator listen error, retrying in %.1fs (attempt %d)",
+                    delay,
+                    attempt,
+                )
+                await asyncio.sleep(delay)
+        logger.info("orchestrator stopped")
