@@ -2,6 +2,7 @@
 
 .PHONY: help up down build ps logs \
 	dev-simulator dev-orchestrator install-orchestrator install-orchestrator-ingest ingest-data \
+	dev-dashboard install-dashboard \
 	go-build go-test go-mod-tidy lint-orchestrator
 
 COMPOSE := docker compose -f infra/docker-compose.yml
@@ -17,6 +18,7 @@ help:
 	@echo ""
 	@echo "  make dev-simulator   Run Go market-simulator locally (:8070)"
 	@echo "  make dev-orchestrator  Run FastAPI orchestrator locally (:8071; install first)"
+	@echo "  make install-dashboard && make dev-dashboard  React dashboard (:5173)"
 	@echo "  make install-orchestrator  pip install -e '.[dev]' in agent-orchestrator/"
 	@echo "  make install-orchestrator-ingest  pip install '.[dev,ingest]' (yfinance + DB load)"
 	@echo "  make ingest-data         Run scripts/ingest_data.py (Postgres must be up)"
@@ -27,7 +29,9 @@ help:
 	@echo "  make lint-orchestrator   ruff check agent-orchestrator (after install)"
 	@echo ""
 	@echo '  Phase 4 Step 15 (pytest, opt-in): RUN_PHASE4_INTEGRATION=1 pytest agent-orchestrator/tests/integration/'
-	$(COMPOSE) up --build
+
+up:
+	$(COMPOSE) up -d --build
 
 down:
 	$(COMPOSE) down
@@ -55,6 +59,12 @@ ingest-data:
 
 dev-orchestrator:
 	cd agent-orchestrator && uvicorn app.main:app --reload --host 0.0.0.0 --port 8071
+
+install-dashboard:
+	cd dashboard && npm install
+
+dev-dashboard:
+	cd dashboard && npm run dev
 
 go-build:
 	cd market-simulator && go build -o bin/server ./cmd/server

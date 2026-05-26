@@ -55,10 +55,31 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8071:8071"
+    env_file:
+      - ../agent-orchestrator/.env
     environment:
       MARKET_SIMULATOR_URL: http://market-simulator:8070
+      REDIS_URL: redis://redis:6379/0
+      # Host Ollama (override 127.0.0.1 from .env when running in Docker on Mac/Windows)
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     depends_on:
       market-simulator:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    ports:
+      - "5173:80"
+    depends_on:
+      market-simulator:
+        condition: service_started
+      agent-orchestrator:
         condition: service_started
 
 volumes:
