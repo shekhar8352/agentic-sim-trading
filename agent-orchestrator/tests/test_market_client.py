@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from market_client.client import MarketClient
-from market_client.errors import APIError, ConfigurationError
+from market_client.errors import APIError, ConfigurationError, TransportError
 from market_client.models import Order
 
 
@@ -103,6 +103,30 @@ async def test_api_error_includes_detail():
         await client.get_portfolio()
     assert exc.value.status_code == 401
     assert exc.value.detail == "invalid credentials"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transport_error_on_connect_failure():
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = _client(httpx.MockTransport(handler))
+    with pytest.raises(TransportError) as exc:
+        await client.get_portfolio()
+    assert "transport error" in str(exc.value).lower()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transport_error_on_timeout():
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out")
+
+    client = _client(httpx.MockTransport(handler))
+    with pytest.raises(TransportError) as exc:
+        await client.get_portfolio()
+    assert "timed out" in str(exc.value).lower()
     await client.aclose()
 
 
