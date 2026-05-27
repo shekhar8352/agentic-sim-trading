@@ -28,6 +28,7 @@ type Registry struct {
 	mu          sync.Mutex
 	clocks      map[uuid.UUID]*SimClock
 	orderCounts map[uuid.UUID]map[uuid.UUID]int // simulation -> agent -> submissions since last match
+	lastAutoTick map[uuid.UUID]time.Time
 }
 
 // NewRegistry constructs an empty registry; clocks are loaded on Start.
@@ -37,8 +38,9 @@ func NewRegistry(pool *pgxpool.Pool, rdb *redis.Client, data *market.Data, match
 		redis:       rdb,
 		market:      data,
 		matcher:     matcher,
-		clocks:      make(map[uuid.UUID]*SimClock),
-		orderCounts: make(map[uuid.UUID]map[uuid.UUID]int),
+		clocks:       make(map[uuid.UUID]*SimClock),
+		orderCounts:  make(map[uuid.UUID]map[uuid.UUID]int),
+		lastAutoTick: make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -204,6 +206,10 @@ func (r *Registry) Tick(ctx context.Context, simulationID uuid.UUID) error {
 	}
 
 	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.CurrentDate, c.Status); err != nil {
+		return err
+	}
+
+	if err := r.maybeCheckpoint(ctx, simulationID, c, advanced); err != nil {
 		return err
 	}
 
