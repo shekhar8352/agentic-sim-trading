@@ -24,13 +24,21 @@ type Row struct {
 	Config    json.RawMessage
 }
 
+func mergeConfigDefaults(override json.RawMessage) json.RawMessage {
+	base := configMap(DefaultConfig())
+	over := configMap(override)
+	for k, v := range over {
+		base[k] = v
+	}
+	b, _ := json.Marshal(base)
+	return b
+}
+
 func Create(ctx context.Context, pool *pgxpool.Pool, name string, startDate, endDate time.Time, config json.RawMessage) (uuid.UUID, error) {
 	if pool == nil {
 		return uuid.Nil, errors.New("database not configured")
 	}
-	if len(config) == 0 {
-		config = json.RawMessage(`{}`)
-	}
+	config = mergeConfigDefaults(config)
 	var id uuid.UUID
 	err := pool.QueryRow(ctx, `
 		INSERT INTO simulations (name, start_date, end_date, as_of_date, status, config)
