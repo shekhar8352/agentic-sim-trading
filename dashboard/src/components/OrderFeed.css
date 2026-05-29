@@ -1,0 +1,79 @@
+.order-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.order-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.order-item:last-child {
+  border-bottom: none;
+}
+
+.order-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.side {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+
+.side-buy {
+  color: var(--profit);
+  background: var(--profit-dim);
+}
+
+.side-sell {
+  color: var(--loss);
+  background: var(--loss-dim);
+}
+
+.symbol {
+  color: var(--text-primary);
+}
+
+.qty {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.order-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.order-agent {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.order-agent:hover {
+  color: var(--accent);
+}
+
+.order-meta time {
+  margin-left: auto;
+}
+
+.feed-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem 0;
+}

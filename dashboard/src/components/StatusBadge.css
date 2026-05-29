@@ -1,0 +1,45 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.badge-live {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: rgba(232, 149, 47, 0.35);
+}
+
+.badge-idle {
+  color: var(--info);
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.badge-done {
+  color: var(--profit);
+  background: var(--profit-dim);
+  border-color: rgba(74, 222, 128, 0.3);
+}
+
+.badge-profit {
+  color: var(--profit);
+  background: var(--profit-dim);
+}
+
+.badge-loss {
+  color: var(--loss);
+  background: var(--loss-dim);
+}
+
+.badge-muted {
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
