@@ -8,7 +8,7 @@ from app.settings import Settings
 from prompts.system import TRADING_SYSTEM_PROMPT
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True) 
 class ProviderSpec:
     id: str
     label: str
