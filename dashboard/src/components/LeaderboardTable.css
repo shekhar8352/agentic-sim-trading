@@ -1,0 +1,84 @@
+.table-wrap {
+  overflow-x: auto;
+}
+
+.data-table {
+  font-size: 0.8rem;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table td {
+  padding: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table tbody tr {
+  transition: background var(--transition);
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.data-table .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.data-table .profit {
+  color: var(--profit);
+}
+
+.data-table .loss {
+  color: var(--loss);
+}
+
+.rank {
+  display: inline-grid;
+  place-items: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 0.75rem;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.rank-1 {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(232, 149, 47, 0.4);
+}
+
+.rank-2,
+.rank-3 {
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+}
+
+.agent-link {
+  color: var(--text-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.agent-link:hover {
+  color: var(--accent);
+}
+
+.table-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem 0;
+}
