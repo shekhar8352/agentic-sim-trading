@@ -719,6 +719,11 @@ class SimulationRunner:
 
 ### Step 15: Integration Testing Checklist
 
+> **Implemented in-repo:** Opt-in pytest module `agent-orchestrator/tests/integration/test_phase4_integration.py`.
+> Export `RUN_PHASE4_INTEGRATION=1`, set `MARKET_SIMULATOR_URL` + `REDIS_URL`, ensure Postgres holds OHLCV for the simulation window.
+> The harness boots **three** agents (Ollama + two `custom`), asserts Redis `sim.events` ticks, leaderboard JSON, and end-of-sim **`completed`**.
+> For one real LLM **`run_turn`**, add `OLLAMA_CHAT_INTEGRATION=1`, run `ollama serve`, and **`ollama pull gemma4:latest`** (or set `OLLAMA_MODEL`).
+
 ```
 □ Create a simulation via API
 □ Register 3 agents (Claude, GPT, rule-based)

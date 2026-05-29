@@ -8,6 +8,7 @@ Layout (Phase 0):
 |------|--------|
 | `market-simulator/` | Go service — virtual clock, matching, portfolios, REST API |
 | `agent-orchestrator/` | FastAPI — LLM agents, prompts, calls into the simulator |
+| `dashboard/` | React — live leaderboard, equity curves, agent comparison |
 | `infra/` | `docker-compose.yml`, `init.sql` |
 | `docs/` | `rules.md`, `rroadmap.md`, `api-spec.yaml` |
 | `Makefile` | Repo-root targets: `make help`, `make up`, local dev, Go tooling |
@@ -42,6 +43,7 @@ cd infra && docker compose up --build
 - **Adminer:** http://localhost:8080 (system: PostgreSQL, server: `postgres`, user/password as above)
 - **Market simulator:** http://localhost:8070/health
 - **Agent orchestrator:** http://localhost:8071/health
+- **Dashboard:** http://localhost:5173 (with `make up`)
 
 ## Local dev (without Docker)
 
