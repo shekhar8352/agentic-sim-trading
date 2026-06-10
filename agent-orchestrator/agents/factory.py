@@ -9,6 +9,7 @@ from agents.custom_agent import CustomAgent
 from agents.gemini_agent import GeminiAgent
 from agents.gpt_agent import GPTAgent
 from agents.ollama_agent import OllamaAgent
+from agents.strategies import CUSTOM_STRATEGY_MODELS
 from app.config_loader import AgentEntry
 
 
@@ -41,6 +42,8 @@ def _agent_config(entry: AgentEntry | dict[str, Any], go_service_url: str) -> di
         "max_tokens": data.get("max_tokens", 1000),
         "context_symbol_count": data.get("context_symbol_count", 10),
         "system_prompt": data.get("system_prompt"),
+        "personality": data.get("personality"),
+        "strategy": data.get("strategy") or data.get("model"),
         "ollama_base_url": (
             (data.get("ollama_base_url") or os.environ.get("OLLAMA_BASE_URL", "")).rstrip("/")
             or "http://127.0.0.1:11434"
@@ -68,5 +71,7 @@ def create_agent(
     if provider == "ollama":
         return OllamaAgent(agent_id, sim_id, config)
     if provider == "custom":
-        return CustomAgent(agent_id, sim_id, config)
+        strategy = str(config.get("strategy") or "momentum-v1").lower()
+        agent_cls = CUSTOM_STRATEGY_MODELS.get(strategy, CustomAgent)
+        return agent_cls(agent_id, sim_id, config)
     raise ValueError(f"unknown agent provider: {provider}")

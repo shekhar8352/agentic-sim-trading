@@ -10,7 +10,7 @@ from agents.factory import create_agent
 from app.settings import Settings
 from app.providers import list_providers
 from orchestrator.manager import get_manager
-from prompts.system import TRADING_SYSTEM_PROMPT
+from prompts.personalities import build_system_prompt, get_personality
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,11 @@ async def launch_simulation(
             spec["model"] = model
         if model and model not in models_by_provider.get(provider, set()):
             raise LaunchError(f"model '{model}' is not supported for provider '{provider}'")
+        if provider != "custom":
+            try:
+                get_personality(spec.get("personality"))
+            except ValueError as exc:
+                raise LaunchError(str(exc)) from exc
 
     go_base = settings.market_simulator_url.rstrip("/")
     config_fragment = {
@@ -107,7 +112,14 @@ async def launch_simulation(
             if not agent_id or not api_key:
                 raise LaunchError("agent registration missing agent_id or api_key", status_code=502)
 
-            prompt = spec.get("system_prompt") or TRADING_SYSTEM_PROMPT
+            personality = spec.get("personality")
+            if spec["provider"] == "custom":
+                prompt = ""
+            else:
+                prompt = build_system_prompt(
+                    personality,
+                    custom_override=spec.get("system_prompt"),
+                )
             entry = {
                 "name": spec["name"],
                 "provider": spec["provider"],
@@ -115,6 +127,8 @@ async def launch_simulation(
                 "agent_id": agent_id,
                 "api_key": api_key,
                 "system_prompt": prompt,
+                "personality": personality,
+                "strategy": spec["model"] if spec["provider"] == "custom" else None,
             }
             agent_instances.append(create_agent(agent_id, sim_id, entry, go_base))
             registered.append(
@@ -123,7 +137,8 @@ async def launch_simulation(
                     "name": spec["name"],
                     "provider": spec["provider"],
                     "model": spec["model"],
-                    "system_prompt": prompt,
+                    "personality": personality,
+                    "system_prompt": prompt or None,
                 }
             )
             config_fragment["orchestrator_agents"].append(
@@ -132,7 +147,8 @@ async def launch_simulation(
                     "name": spec["name"],
                     "provider": spec["provider"],
                     "model": spec["model"],
-                    "system_prompt": prompt,
+                    "personality": personality,
+                    "system_prompt": prompt or None,
                 }
             )
 

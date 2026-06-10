@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.settings import Settings
+from agents.strategies import STRATEGY_CATALOG
+from prompts.personalities import DEFAULT_PERSONALITY_ID, build_system_prompt, list_personalities
 from prompts.system import TRADING_SYSTEM_PROMPT
 
 
@@ -34,7 +36,12 @@ PROVIDER_CATALOG: tuple[ProviderSpec, ...] = (
     ProviderSpec("claude", "Anthropic", ("claude-sonnet-4-20250514", "claude-3-5-haiku-20241022")),
     ProviderSpec("gemini", "Google Gemini", ("gemini-2.0-flash", "gemini-1.5-pro")),
     ProviderSpec("ollama", "Ollama (local)", DEFAULT_OLLAMA_MODELS, requires_api_key=False),
-    ProviderSpec("custom", "Rules (no LLM)", ("momentum-v1",), requires_api_key=False),
+    ProviderSpec(
+        "custom",
+        "Rules (no LLM)",
+        tuple(s["id"] for s in STRATEGY_CATALOG),
+        requires_api_key=False,
+    ),
 )
 
 
@@ -107,5 +114,9 @@ def list_providers(settings: Settings) -> list[dict]:
     return out
 
 
-def default_system_prompt() -> str:
-    return TRADING_SYSTEM_PROMPT
+def default_system_prompt(personality_id: str | None = None) -> str:
+    return build_system_prompt(personality_id or DEFAULT_PERSONALITY_ID)
+
+
+def list_strategies() -> list[dict]:
+    return [dict(row) for row in STRATEGY_CATALOG]
