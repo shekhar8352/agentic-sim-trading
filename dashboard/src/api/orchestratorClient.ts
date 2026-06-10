@@ -1,4 +1,4 @@
-import type { ProviderInfo } from './types'
+import type { PersonalityInfo, ProviderInfo, StrategyInfo } from './types'
 
 const orchestratorBase = import.meta.env.VITE_ORCHESTRATOR_URL ?? '/orchestrator-api'
 
@@ -18,13 +18,23 @@ export interface LaunchAgentInput {
   name: string
   provider: string
   model: string
+  personality?: string
   system_prompt?: string
 }
 
 export const orchestratorApi = {
   getProviders: () =>
-    orchRequest<{ providers: ProviderInfo[]; default_system_prompt: string }>(
-      '/api/v1/providers',
+    orchRequest<{
+      providers: ProviderInfo[]
+      default_system_prompt: string
+      personalities: PersonalityInfo[]
+      strategies: StrategyInfo[]
+      default_personality: string
+    }>('/api/v1/providers'),
+
+  getPersonalityPrompt: (personalityId: string) =>
+    orchRequest<{ personality: string; system_prompt: string }>(
+      `/api/v1/personalities/${personalityId}/prompt`,
     ),
 
   launchSimulation: (body: {

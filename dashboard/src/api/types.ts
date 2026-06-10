@@ -25,6 +25,19 @@ export interface ProviderInfo {
   requires_api_key: boolean
 }
 
+export interface PersonalityInfo {
+  id: string
+  label: string
+  description: string
+  applies_to: string
+}
+
+export interface StrategyInfo {
+  id: string
+  label: string
+  description: string
+}
+
 export interface SimulationDetail {
   id: string
   name: string

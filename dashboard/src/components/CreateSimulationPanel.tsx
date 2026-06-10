@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { orchestratorApi } from '../api/orchestratorClient'
-import type { ProviderInfo } from '../api/types'
+import type { PersonalityInfo, ProviderInfo, StrategyInfo } from '../api/types'
 import { Panel } from './Panel'
 import '../pages/pages.css'
 
@@ -11,10 +11,16 @@ interface AgentDraft {
   name: string
   provider: string
   model: string
+  personality: string
   system_prompt: string
+  prompt_customized: boolean
 }
 
-function newAgentDraft(defaultPrompt: string, defaultProvider?: ProviderInfo): AgentDraft {
+function newAgentDraft(
+  defaultPersonality: string,
+  defaultPrompt: string,
+  defaultProvider?: ProviderInfo,
+): AgentDraft {
   const provider = defaultProvider?.id ?? 'custom'
   const model = defaultProvider?.models[0] ?? 'momentum-v1'
   return {
@@ -22,7 +28,9 @@ function newAgentDraft(defaultPrompt: string, defaultProvider?: ProviderInfo): A
     name: '',
     provider,
     model,
+    personality: defaultPersonality,
     system_prompt: defaultPrompt,
+    prompt_customized: false,
   }
 }
 
@@ -38,6 +46,9 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
   const [endDate, setEndDate] = useState('2023-12-31')
   const [checkpointDays, setCheckpointDays] = useState(5)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [personalities, setPersonalities] = useState<PersonalityInfo[]>([])
+  const [strategies, setStrategies] = useState<StrategyInfo[]>([])
+  const [defaultPersonality, setDefaultPersonality] = useState('balanced')
   const [defaultPrompt, setDefaultPrompt] = useState('')
   const [agents, setAgents] = useState<AgentDraft[]>([])
   const [loadingProviders, setLoadingProviders] = useState(true)
@@ -52,9 +63,14 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
       .then((res) => {
         if (cancelled) return
         setProviders(res.providers)
+        setPersonalities(res.personalities)
+        setStrategies(res.strategies)
+        setDefaultPersonality(res.default_personality)
         setDefaultPrompt(res.default_system_prompt)
         const firstAvailable = res.providers.find((p) => p.available) ?? res.providers[0]
-        setAgents([newAgentDraft(res.default_system_prompt, firstAvailable)])
+        setAgents([
+          newAgentDraft(res.default_personality, res.default_system_prompt, firstAvailable),
+        ])
       })
       .catch((err) => {
         if (!cancelled) {
@@ -74,25 +90,64 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
     [providers],
   )
 
+  const personalityById = useMemo(
+    () => Object.fromEntries(personalities.map((p) => [p.id, p])),
+    [personalities],
+  )
+
+  const strategyById = useMemo(
+    () => Object.fromEntries(strategies.map((s) => [s.id, s])),
+    [strategies],
+  )
+
   const updateAgent = useCallback((key: string, patch: Partial<AgentDraft>) => {
     setAgents((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)))
   }, [])
 
+  const applyPersonalityPrompt = useCallback(async (key: string, personalityId: string) => {
+    try {
+      const res = await orchestratorApi.getPersonalityPrompt(personalityId)
+      updateAgent(key, {
+        personality: personalityId,
+        system_prompt: res.system_prompt,
+        prompt_customized: false,
+      })
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to load personality prompt')
+    }
+  }, [updateAgent])
+
   const onProviderChange = useCallback(
     (key: string, providerId: string) => {
       const spec = providers.find((p) => p.id === providerId)
+      const model = spec?.models[0] ?? ''
       updateAgent(key, {
         provider: providerId,
-        model: spec?.models[0] ?? '',
+        model,
       })
+      if (providerId !== 'custom') {
+        const agent = agents.find((a) => a.key === key)
+        const personality = agent?.personality ?? defaultPersonality
+        void applyPersonalityPrompt(key, personality)
+      }
     },
-    [providers, updateAgent],
+    [agents, applyPersonalityPrompt, defaultPersonality, providers, updateAgent],
+  )
+
+  const onPersonalityChange = useCallback(
+    (key: string, personalityId: string) => {
+      void applyPersonalityPrompt(key, personalityId)
+    },
+    [applyPersonalityPrompt],
   )
 
   const addAgent = useCallback(() => {
     const first = availableProviders[0]
-    setAgents((rows) => [...rows, newAgentDraft(defaultPrompt, first)])
-  }, [availableProviders, defaultPrompt])
+    setAgents((rows) => [
+      ...rows,
+      newAgentDraft(defaultPersonality, defaultPrompt, first),
+    ])
+  }, [availableProviders, defaultPersonality, defaultPrompt])
 
   const removeAgent = useCallback((key: string) => {
     setAgents((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.key !== key)))
@@ -123,7 +178,9 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
             name: a.name.trim(),
             provider: a.provider,
             model: a.model,
-            system_prompt: a.provider === 'custom' ? undefined : a.system_prompt,
+            personality: a.provider === 'custom' ? undefined : a.personality,
+            system_prompt:
+              a.provider === 'custom' || !a.prompt_customized ? undefined : a.system_prompt,
           })),
         })
         onCreated()
@@ -140,7 +197,7 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
   return (
     <Panel
       title="Create & launch simulation"
-      subtitle="Configure agents, prompts, and start the orchestrator in one step"
+      subtitle="Pick agent personalities or rule-based strategies, then start the orchestrator"
     >
       {loadingProviders ? (
         <p className="empty-state">Loading available providers…</p>
@@ -191,8 +248,8 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
           <div className="agent-section-header">
             <h3>Agents</h3>
             <p className="lede">
-              Providers shown based on API keys configured on the orchestrator (
-              {availableProviders.map((p) => p.label).join(', ') || 'none available'}).
+              LLM agents use trading personalities (risk taker, momentum, etc.). Rules-based agents
+              use Step 19 strategies — no API key required.
             </p>
             <button type="button" className="btn ghost" onClick={addAgent}>
               <Plus size={16} />
@@ -204,6 +261,8 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
             {agents.map((agent, index) => {
               const spec = providers.find((p) => p.id === agent.provider)
               const isLlm = agent.provider !== 'custom'
+              const personality = personalityById[agent.personality]
+              const strategy = strategyById[agent.model]
               return (
                 <div key={agent.key} className="agent-draft-card">
                   <div className="agent-draft-top">
@@ -243,33 +302,79 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
                         ))}
                       </select>
                     </label>
-                    <label>
-                      Model
-                      <select
-                        value={agent.model}
-                        onChange={(e) => updateAgent(agent.key, { model: e.target.value })}
-                      >
-                        {(spec?.models ?? []).map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    {isLlm ? (
+                      <label>
+                        Trading personality
+                        <select
+                          value={agent.personality}
+                          onChange={(e) => onPersonalityChange(agent.key, e.target.value)}
+                        >
+                          {personalities.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                        {personality ? (
+                          <span className="field-hint">{personality.description}</span>
+                        ) : null}
+                      </label>
+                    ) : (
+                      <label>
+                        Strategy
+                        <select
+                          value={agent.model}
+                          onChange={(e) => updateAgent(agent.key, { model: e.target.value })}
+                        >
+                          {(spec?.models ?? []).map((m) => (
+                            <option key={m} value={m}>
+                              {strategyById[m]?.label ?? m}
+                            </option>
+                          ))}
+                        </select>
+                        {strategy ? (
+                          <span className="field-hint">{strategy.description}</span>
+                        ) : null}
+                      </label>
+                    )}
+                    {isLlm ? (
+                      <label>
+                        Model
+                        <select
+                          value={agent.model}
+                          onChange={(e) => updateAgent(agent.key, { model: e.target.value })}
+                        >
+                          {(spec?.models ?? []).map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                   </div>
                   {isLlm ? (
                     <label className="prompt-field">
                       System prompt
+                      <span className="field-hint">
+                        Auto-filled from personality. Edit to override sizing and behavior rules.
+                      </span>
                       <textarea
                         rows={6}
                         value={agent.system_prompt}
                         onChange={(e) =>
-                          updateAgent(agent.key, { system_prompt: e.target.value })
+                          updateAgent(agent.key, {
+                            system_prompt: e.target.value,
+                            prompt_customized: true,
+                          })
                         }
                       />
                     </label>
                   ) : (
-                    <p className="agent-note">Rules-based agent — no LLM prompt required.</p>
+                    <p className="agent-note">
+                      Rules-based <strong>{strategy?.label ?? agent.model}</strong> agent — executes
+                      deterministic strategy logic each tick.
+                    </p>
                   )}
                 </div>
               )
