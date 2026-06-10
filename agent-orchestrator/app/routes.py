@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.launch_service import LaunchError, launch_simulation, update_simulation_prompts
-from app.providers import default_system_prompt, list_providers
+from app.providers import default_system_prompt, list_providers, list_strategies
+from prompts.personalities import DEFAULT_PERSONALITY_ID, build_system_prompt, list_personalities
 from app.settings import get_settings
 from orchestrator.manager import get_manager
 
@@ -15,6 +16,7 @@ class LaunchAgentSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     provider: str
     model: str
+    personality: str = DEFAULT_PERSONALITY_ID
     system_prompt: str | None = None
 
 
@@ -41,7 +43,28 @@ def get_providers():
     return {
         "providers": list_providers(settings),
         "default_system_prompt": default_system_prompt(),
+        "personalities": list_personalities(),
+        "strategies": list_strategies(),
+        "default_personality": DEFAULT_PERSONALITY_ID,
     }
+
+
+@router.get("/personalities")
+def get_personalities():
+    return {
+        "personalities": list_personalities(),
+        "default_personality": DEFAULT_PERSONALITY_ID,
+        "default_system_prompt": default_system_prompt(),
+    }
+
+
+@router.get("/personalities/{personality_id}/prompt")
+def get_personality_prompt(personality_id: str):
+    try:
+        prompt = build_system_prompt(personality_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"personality": personality_id, "system_prompt": prompt}
 
 
 @router.get("/orchestrator/status/{simulation_id}")
