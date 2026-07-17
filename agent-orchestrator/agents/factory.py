@@ -10,14 +10,42 @@ from agents.gemini_agent import GeminiAgent
 from agents.gpt_agent import GPTAgent
 from agents.ollama_agent import OllamaAgent
 from agents.strategies import CUSTOM_STRATEGY_MODELS
+from agents.team_agent import wrap_with_team
 from app.config_loader import AgentEntry
+from prompts.roles import DEFAULT_TEAM_ROLES
+
+
+def _as_dict(entry: AgentEntry | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(entry, AgentEntry):
+        return entry.model_dump()
+    return dict(entry)
+
+
+def _wants_team_mode(data: dict[str, Any], provider: str) -> bool:
+    """LLM desks default to multi-role team mode; custom strategies stay single-agent."""
+    if provider == "custom":
+        return False
+    if "team_mode" in data and data["team_mode"] is not None:
+        return bool(data["team_mode"])
+    # Explicit team block implies enabled unless team_mode=false.
+    if isinstance(data.get("team"), dict):
+        return bool(data["team"].get("enabled", True))
+    # New default for LLM providers: analyst → risk/strategist → head.
+    return True
+
+
+def _team_roles(data: dict[str, Any]) -> list[str] | None:
+    team = data.get("team")
+    if isinstance(team, dict) and team.get("roles"):
+        return list(team["roles"])
+    roles = data.get("team_roles")
+    if roles:
+        return list(roles)
+    return list(DEFAULT_TEAM_ROLES)
 
 
 def _agent_config(entry: AgentEntry | dict[str, Any], go_service_url: str) -> dict[str, Any]:
-    if isinstance(entry, AgentEntry):
-        data = entry.model_dump()
-    else:
-        data = dict(entry)
+    data = _as_dict(entry)
     agent_id = data.get("agent_id")
     api_key = data.get("api_key")
 
@@ -44,6 +72,9 @@ def _agent_config(entry: AgentEntry | dict[str, Any], go_service_url: str) -> di
         "system_prompt": data.get("system_prompt"),
         "personality": data.get("personality"),
         "strategy": data.get("strategy") or data.get("model"),
+        "team_mode": data.get("team_mode"),
+        "team": data.get("team"),
+        "team_roles": data.get("team_roles"),
         "ollama_base_url": (
             (data.get("ollama_base_url") or os.environ.get("OLLAMA_BASE_URL", "")).rstrip("/")
             or "http://127.0.0.1:11434"
@@ -52,14 +83,11 @@ def _agent_config(entry: AgentEntry | dict[str, Any], go_service_url: str) -> di
     }
 
 
-def create_agent(
+def _create_backend(
     agent_id: str,
     sim_id: str,
-    entry: AgentEntry | dict[str, Any],
-    go_service_url: str,
+    config: dict[str, Any],
 ) -> BaseAgent:
-    """Instantiate an agent from config/agents.yaml entry."""
-    config = _agent_config(entry, go_service_url)
     provider = str(config.get("provider", "custom")).lower()
 
     if provider == "claude":
@@ -75,3 +103,26 @@ def create_agent(
         agent_cls = CUSTOM_STRATEGY_MODELS.get(strategy, CustomAgent)
         return agent_cls(agent_id, sim_id, config)
     raise ValueError(f"unknown agent provider: {provider}")
+
+
+def create_agent(
+    agent_id: str,
+    sim_id: str,
+    entry: AgentEntry | dict[str, Any],
+    go_service_url: str,
+) -> BaseAgent:
+    """Instantiate an agent from config/agents.yaml entry.
+
+    LLM providers are wrapped in a multi-role ``TradingTeamAgent`` by default
+    (analyst, risk officer, strategist, head). Set ``team_mode: false`` for the
+    legacy single-prompt trader.
+    """
+    data = _as_dict(entry)
+    config = _agent_config(entry, go_service_url)
+    provider = str(config.get("provider", "custom")).lower()
+    backend = _create_backend(agent_id, sim_id, config)
+    return wrap_with_team(
+        backend,
+        team_mode=_wants_team_mode(data, provider),
+        roles=_team_roles(data),
+    )

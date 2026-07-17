@@ -2,6 +2,11 @@
 # After registering agents via POST /api/v1/simulations/{id}/agents, set agent_id and api_key per entry.
 #
 # Ollama (Step 15): provider: ollama, model e.g. gemma4:latest, optional ollama_base_url.
+#
+# Multi-agent trading desk (default for LLM providers):
+#   Each LLM entry runs as a team — analyst, risk_officer, strategist, then head trader.
+#   Only the head places orders; teammates produce briefings. One Go portfolio per entry.
+#   Disable with team_mode: false for the legacy single-prompt trader.
 
 go_service_url: http://localhost:8070
 
@@ -13,15 +18,21 @@ agents:
     model: claude-sonnet-4-20250514
     agent_id: null
     api_key: null
+    team_mode: true
+    team:
+      enabled: true
+      roles: [analyst, risk_officer, strategist, head]
 
   - name: demo-gpt
     provider: gpt
     model: gpt-4o
     agent_id: null
     api_key: null
+    team_mode: true
 
   - name: demo-rules
     provider: custom
     model: momentum-v1
     agent_id: null
     api_key: null
+    # Rule-based strategies stay single-agent (no LLM team).

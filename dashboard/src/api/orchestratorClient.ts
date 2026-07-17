@@ -1,4 +1,4 @@
-import type { PersonalityInfo, ProviderInfo, StrategyInfo } from './types'
+import type { PersonalityInfo, ProviderInfo, StrategyInfo, TeamDeskInfo } from './types'
 
 const orchestratorBase = import.meta.env.VITE_ORCHESTRATOR_URL ?? '/orchestrator-api'
 
@@ -20,6 +20,8 @@ export interface LaunchAgentInput {
   model: string
   personality?: string
   system_prompt?: string
+  team_mode?: boolean
+  team_roles?: string[]
 }
 
 export const orchestratorApi = {
@@ -30,6 +32,9 @@ export const orchestratorApi = {
       personalities: PersonalityInfo[]
       strategies: StrategyInfo[]
       default_personality: string
+      team_desk?: TeamDeskInfo
+      default_team_mode?: boolean
+      default_team_roles?: string[]
     }>('/api/v1/providers'),
 
   getPersonalityPrompt: (personalityId: string) =>

@@ -14,15 +14,18 @@ interface AgentDraft {
   personality: string
   system_prompt: string
   prompt_customized: boolean
+  team_mode: boolean
 }
 
 function newAgentDraft(
   defaultPersonality: string,
   defaultPrompt: string,
   defaultProvider?: ProviderInfo,
+  defaultTeamMode = true,
 ): AgentDraft {
   const provider = defaultProvider?.id ?? 'custom'
   const model = defaultProvider?.models[0] ?? 'momentum-v1'
+  const isLlm = provider !== 'custom'
   return {
     key: crypto.randomUUID(),
     name: '',
@@ -31,6 +34,7 @@ function newAgentDraft(
     personality: defaultPersonality,
     system_prompt: defaultPrompt,
     prompt_customized: false,
+    team_mode: isLlm ? defaultTeamMode : false,
   }
 }
 
@@ -50,6 +54,8 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [defaultPersonality, setDefaultPersonality] = useState('balanced')
   const [defaultPrompt, setDefaultPrompt] = useState('')
+  const [defaultTeamMode, setDefaultTeamMode] = useState(true)
+  const [teamDeskDescription, setTeamDeskDescription] = useState('')
   const [agents, setAgents] = useState<AgentDraft[]>([])
   const [loadingProviders, setLoadingProviders] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -67,9 +73,17 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
         setStrategies(res.strategies)
         setDefaultPersonality(res.default_personality)
         setDefaultPrompt(res.default_system_prompt)
+        const teamDefault = res.default_team_mode ?? res.team_desk?.default_team_mode ?? true
+        setDefaultTeamMode(teamDefault)
+        setTeamDeskDescription(res.team_desk?.description ?? '')
         const firstAvailable = res.providers.find((p) => p.available) ?? res.providers[0]
         setAgents([
-          newAgentDraft(res.default_personality, res.default_system_prompt, firstAvailable),
+          newAgentDraft(
+            res.default_personality,
+            res.default_system_prompt,
+            firstAvailable,
+            teamDefault,
+          ),
         ])
       })
       .catch((err) => {
@@ -121,17 +135,19 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
     (key: string, providerId: string) => {
       const spec = providers.find((p) => p.id === providerId)
       const model = spec?.models[0] ?? ''
+      const isLlm = providerId !== 'custom'
       updateAgent(key, {
         provider: providerId,
         model,
+        team_mode: isLlm ? defaultTeamMode : false,
       })
-      if (providerId !== 'custom') {
+      if (isLlm) {
         const agent = agents.find((a) => a.key === key)
         const personality = agent?.personality ?? defaultPersonality
         void applyPersonalityPrompt(key, personality)
       }
     },
-    [agents, applyPersonalityPrompt, defaultPersonality, providers, updateAgent],
+    [agents, applyPersonalityPrompt, defaultPersonality, defaultTeamMode, providers, updateAgent],
   )
 
   const onPersonalityChange = useCallback(
@@ -145,9 +161,9 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
     const first = availableProviders[0]
     setAgents((rows) => [
       ...rows,
-      newAgentDraft(defaultPersonality, defaultPrompt, first),
+      newAgentDraft(defaultPersonality, defaultPrompt, first, defaultTeamMode),
     ])
-  }, [availableProviders, defaultPersonality, defaultPrompt])
+  }, [availableProviders, defaultPersonality, defaultPrompt, defaultTeamMode])
 
   const removeAgent = useCallback((key: string) => {
     setAgents((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.key !== key)))
@@ -181,6 +197,7 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
             personality: a.provider === 'custom' ? undefined : a.personality,
             system_prompt:
               a.provider === 'custom' || !a.prompt_customized ? undefined : a.system_prompt,
+            team_mode: a.provider === 'custom' ? false : a.team_mode,
           })),
         })
         onCreated()
@@ -248,8 +265,9 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
           <div className="agent-section-header">
             <h3>Agents</h3>
             <p className="lede">
-              LLM agents use trading personalities (risk taker, momentum, etc.). Rules-based agents
-              use Step 19 strategies — no API key required.
+              LLM agents run as a trading desk by default (analyst → risk/strategist → head).
+              Rules-based agents use Step 19 strategies — no API key required.
+              {teamDeskDescription ? ` ${teamDeskDescription}` : ''}
             </p>
             <button type="button" className="btn ghost" onClick={addAgent}>
               <Plus size={16} />
@@ -354,22 +372,40 @@ export function CreateSimulationPanel({ onCancel, onCreated }: CreateSimulationP
                     ) : null}
                   </div>
                   {isLlm ? (
-                    <label className="prompt-field">
-                      System prompt
-                      <span className="field-hint">
-                        Auto-filled from personality. Edit to override sizing and behavior rules.
-                      </span>
-                      <textarea
-                        rows={6}
-                        value={agent.system_prompt}
-                        onChange={(e) =>
-                          updateAgent(agent.key, {
-                            system_prompt: e.target.value,
-                            prompt_customized: true,
-                          })
-                        }
-                      />
-                    </label>
+                    <>
+                      <label className="checkbox-field">
+                        <input
+                          type="checkbox"
+                          checked={agent.team_mode}
+                          onChange={(e) =>
+                            updateAgent(agent.key, { team_mode: e.target.checked })
+                          }
+                        />
+                        <span>
+                          Multi-agent desk
+                          <span className="field-hint">
+                            Analyst, risk officer, and strategist brief the head trader each tick
+                            (one shared portfolio).
+                          </span>
+                        </span>
+                      </label>
+                      <label className="prompt-field">
+                        System prompt
+                        <span className="field-hint">
+                          Applied to the head trader (and solo mode). Auto-filled from personality.
+                        </span>
+                        <textarea
+                          rows={6}
+                          value={agent.system_prompt}
+                          onChange={(e) =>
+                            updateAgent(agent.key, {
+                              system_prompt: e.target.value,
+                              prompt_customized: true,
+                            })
+                          }
+                        />
+                      </label>
+                    </>
                   ) : (
                     <p className="agent-note">
                       Rules-based <strong>{strategy?.label ?? agent.model}</strong> agent — executes
