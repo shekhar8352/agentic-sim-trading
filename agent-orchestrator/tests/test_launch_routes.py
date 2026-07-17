@@ -12,6 +12,10 @@ def test_providers_endpoint():
     assert "default_system_prompt" in body
     assert "personalities" in body
     assert "strategies" in body
+    assert body["default_team_mode"] is True
+    assert "team_desk" in body
+    assert any(r["id"] == "analyst" for r in body["team_desk"]["roles"])
+    assert any(r["id"] == "head" for r in body["team_desk"]["roles"])
     assert any(p["id"] == "custom" for p in body["providers"])
     assert any(p["id"] == "risk_taker" for p in body["personalities"])
 
