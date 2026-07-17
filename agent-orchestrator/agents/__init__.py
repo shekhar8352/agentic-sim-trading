@@ -6,6 +6,7 @@ from agents.gemini_agent import GeminiAgent
 from agents.gpt_agent import GPTAgent
 from agents.llm_agent import LLMAgent
 from agents.ollama_agent import OllamaAgent
+from agents.team_agent import TradingTeamAgent
 from agents.universe import NIFTY_50
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "GPTAgent",
     "LLMAgent",
     "OllamaAgent",
+    "TradingTeamAgent",
     "NIFTY_50",
     "create_agent",
 ]
