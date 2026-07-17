@@ -127,6 +127,19 @@ Failure modes handled in the orchestrator:
 
 `BaseAgent.run_turn(date)` builds context (portfolio + top-10 Nifty OHLCV), calls `decide()`, and submits up to 10 orders via `MarketClient`.
 
+### Multi-agent trading desk
+
+LLM providers (**claude / gpt / gemini / ollama**) default to a **team** on each tick — one Go portfolio, several role prompts:
+
+| Role | Job |
+|------|-----|
+| **Analyst** | Reads OHLCV trends; writes a market briefing (no orders) |
+| **Risk Officer** | Sets cash / concentration constraints; vetoes unsafe ideas |
+| **Strategist** | Proposes a short prioritized trade plan |
+| **Head Trader** | Synthesizes teammate reports and emits the final JSON orders |
+
+Set `team_mode: false` on an agent entry (or uncheck “Multi-agent desk” in the dashboard) for the legacy single-prompt trader. Customize roles with `team.roles` / `team_roles` (must include `head`).
+
 ```python
 from agents import create_agent
 from app.config_loader import load_agents_config

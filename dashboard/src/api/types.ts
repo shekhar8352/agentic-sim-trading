@@ -15,6 +15,21 @@ export interface OrchestratorAgentConfig {
   provider: string
   model: string
   system_prompt?: string
+  team_mode?: boolean
+  team_roles?: string[]
+}
+
+export interface TeamRoleInfo {
+  id: string
+  label: string
+  description: string
+}
+
+export interface TeamDeskInfo {
+  default_team_mode: boolean
+  default_roles: string[]
+  roles: TeamRoleInfo[]
+  description: string
 }
 
 export interface ProviderInfo {
