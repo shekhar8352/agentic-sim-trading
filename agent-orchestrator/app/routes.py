@@ -4,10 +4,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.launch_service import LaunchError, launch_simulation, update_simulation_prompts
-from app.providers import default_system_prompt, list_providers, list_strategies
-from prompts.personalities import DEFAULT_PERSONALITY_ID, build_system_prompt, list_personalities
+from app.providers import default_system_prompt, list_providers, list_strategies, team_desk_catalog
 from app.settings import get_settings
 from orchestrator.manager import get_manager
+from prompts.personalities import DEFAULT_PERSONALITY_ID, build_system_prompt, list_personalities
+from prompts.roles import DEFAULT_TEAM_ROLES
 
 router = APIRouter(prefix="/api/v1")
 
@@ -18,6 +19,9 @@ class LaunchAgentSpec(BaseModel):
     model: str
     personality: str = DEFAULT_PERSONALITY_ID
     system_prompt: str | None = None
+    # Multi-agent desk (LLM only). Default true — analyst/risk/strategist → head.
+    team_mode: bool | None = None
+    team_roles: list[str] | None = None
 
 
 class LaunchSimulationRequest(BaseModel):
@@ -40,12 +44,16 @@ class UpdatePromptsRequest(BaseModel):
 @router.get("/providers")
 def get_providers():
     settings = get_settings()
+    desk = team_desk_catalog()
     return {
         "providers": list_providers(settings),
         "default_system_prompt": default_system_prompt(),
         "personalities": list_personalities(),
         "strategies": list_strategies(),
         "default_personality": DEFAULT_PERSONALITY_ID,
+        "team_desk": desk,
+        "default_team_mode": desk["default_team_mode"],
+        "default_team_roles": list(DEFAULT_TEAM_ROLES),
     }
 
 

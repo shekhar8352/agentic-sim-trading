@@ -86,6 +86,8 @@ class OrchestratorManager:
         for agent in self._agents.get(simulation_id, []):
             if agent.agent_id not in prompts_by_agent_id:
                 continue
+            # TradingTeamAgent exposes system_prompt for the head personality;
+            # plain LLMAgent also has the attribute.
             if hasattr(agent, "system_prompt"):
                 agent.system_prompt = prompts_by_agent_id[agent.agent_id]
                 updated += 1

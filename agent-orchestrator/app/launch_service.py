@@ -7,10 +7,12 @@ import httpx
 
 from agents.decisions import resolve_gpt_model
 from agents.factory import create_agent
-from app.settings import Settings
+from agents.team_agent import TradingTeamAgent
 from app.providers import list_providers
+from app.settings import Settings
 from orchestrator.manager import get_manager
 from prompts.personalities import build_system_prompt, get_personality
+from prompts.roles import DEFAULT_TEAM_ROLES, normalize_team_roles
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,10 @@ async def _go_json(
             detail = body.get("detail", detail)
         except Exception:
             pass
-        raise LaunchError(f"market-simulator {method} {path}: {detail}", status_code=resp.status_code)
+        raise LaunchError(
+            f"market-simulator {method} {path}: {detail}",
+            status_code=resp.status_code,
+        )
     if not resp.content:
         return {}
     data = resp.json()
@@ -74,6 +79,11 @@ async def launch_simulation(
                 get_personality(spec.get("personality"))
             except ValueError as exc:
                 raise LaunchError(str(exc)) from exc
+            if spec.get("team_roles") is not None:
+                try:
+                    normalize_team_roles(spec.get("team_roles"))
+                except ValueError as exc:
+                    raise LaunchError(str(exc)) from exc
 
     go_base = settings.market_simulator_url.rstrip("/")
     config_fragment = {
@@ -113,12 +123,23 @@ async def launch_simulation(
                 raise LaunchError("agent registration missing agent_id or api_key", status_code=502)
 
             personality = spec.get("personality")
-            if spec["provider"] == "custom":
+            is_custom = spec["provider"] == "custom"
+            if is_custom:
                 prompt = ""
+                team_mode = False
+                team_roles: list[str] | None = None
             else:
                 prompt = build_system_prompt(
                     personality,
                     custom_override=spec.get("system_prompt"),
+                )
+                # Default LLM desks to multi-role team mode.
+                team_mode = True if spec.get("team_mode") is None else bool(spec.get("team_mode"))
+                raw_roles = spec.get("team_roles")
+                team_roles = (
+                    list(normalize_team_roles(raw_roles))
+                    if raw_roles is not None
+                    else list(DEFAULT_TEAM_ROLES)
                 )
             entry = {
                 "name": spec["name"],
@@ -128,9 +149,17 @@ async def launch_simulation(
                 "api_key": api_key,
                 "system_prompt": prompt,
                 "personality": personality,
-                "strategy": spec["model"] if spec["provider"] == "custom" else None,
+                "strategy": spec["model"] if is_custom else None,
+                "team_mode": team_mode,
+                "team_roles": team_roles,
             }
-            agent_instances.append(create_agent(agent_id, sim_id, entry, go_base))
+            agent = create_agent(agent_id, sim_id, entry, go_base)
+            agent_instances.append(agent)
+            roles_out = (
+                list(agent.roles)
+                if isinstance(agent, TradingTeamAgent)
+                else None
+            )
             registered.append(
                 {
                     "agent_id": agent_id,
@@ -139,6 +168,8 @@ async def launch_simulation(
                     "model": spec["model"],
                     "personality": personality,
                     "system_prompt": prompt or None,
+                    "team_mode": isinstance(agent, TradingTeamAgent),
+                    "team_roles": roles_out,
                 }
             )
             config_fragment["orchestrator_agents"].append(
@@ -149,6 +180,8 @@ async def launch_simulation(
                     "model": spec["model"],
                     "personality": personality,
                     "system_prompt": prompt or None,
+                    "team_mode": isinstance(agent, TradingTeamAgent),
+                    "team_roles": roles_out,
                 }
             )
 

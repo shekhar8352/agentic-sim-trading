@@ -4,13 +4,13 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.settings import Settings
 from agents.strategies import STRATEGY_CATALOG
-from prompts.personalities import DEFAULT_PERSONALITY_ID, build_system_prompt, list_personalities
-from prompts.system import TRADING_SYSTEM_PROMPT
+from app.settings import Settings
+from prompts.personalities import DEFAULT_PERSONALITY_ID, build_system_prompt
+from prompts.roles import DEFAULT_TEAM_ROLES, list_team_roles
 
 
-@dataclass(frozen=True) 
+@dataclass(frozen=True)
 class ProviderSpec:
     id: str
     label: str
@@ -120,3 +120,16 @@ def default_system_prompt(personality_id: str | None = None) -> str:
 
 def list_strategies() -> list[dict]:
     return [dict(row) for row in STRATEGY_CATALOG]
+
+
+def team_desk_catalog() -> dict:
+    """Describe the multi-role trading desk used by LLM agents."""
+    return {
+        "default_team_mode": True,
+        "default_roles": list(DEFAULT_TEAM_ROLES),
+        "roles": list_team_roles(),
+        "description": (
+            "LLM agents run as a trading desk: Market Analyst, Risk Officer, and "
+            "Strategist brief the Head Trader, who alone places orders against one portfolio."
+        ),
+    }
