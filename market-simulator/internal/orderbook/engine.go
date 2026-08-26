@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -20,10 +19,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const minStockPrice = 10.0
-const concentrationPct = 0.20
-
-// Engine executes Phase 1 market orders per docs/rules.md §7–9.
+// Engine executes EOD matching per docs/rules.md §7–9 (market, limit, and stop).
 type Engine struct {
 	Pool *pgxpool.Pool
 	Data *market.Data
@@ -127,22 +123,35 @@ func (e *Engine) ProcessSimulationDay(ctx context.Context, simulationID uuid.UUI
 		}
 		prevCloseCache[sym] = prevBar.Close
 		prevVol[sym] = prevBar.Volume
-		pc := prevBar.Close
-		open := barD.Open
-		if pc > 0 {
-			pct := (open - pc) / pc * 100
-			if math.Abs(pct) > 10 {
-				breakerOn[sym] = true
-				continue
-			}
-		}
-		breakerOn[sym] = false
+		breakerOn[sym] = CircuitTriggered(barD.Open, prevBar.Close)
 	}
 
 	var redisPayloads []map[string]any
 
 	for _, o := range pending {
 		reason := e.tryFillOrder(ctx, tx, simulationID, tradeDate, o, breakerOn, prevVol, prevCloseCache, &redisPayloads)
+		if reason == ReasonDefer {
+			next, err := e.Data.NextTradingDay(ctx, tradeDate)
+			if err != nil || next.IsZero() {
+				if err := orders.MarkRejected(ctx, tx, o.ID, "not_filled_before_end"); err != nil {
+					return err
+				}
+				redisPayloads = append(redisPayloads, map[string]any{
+					"event":         "order.rejected",
+					"order_id":      o.ID.String(),
+					"simulation_id": simulationID.String(),
+					"agent_id":      o.AgentID.String(),
+					"symbol":        o.Symbol,
+					"reason":        "not_filled_before_end",
+					"match_on_date": tradeDate.UTC().Format(time.DateOnly),
+				})
+				continue
+			}
+			if err := orders.UpdateMatchOnDate(ctx, tx, o.ID, next); err != nil {
+				return err
+			}
+			continue
+		}
 		if reason != "" {
 			if err := orders.MarkRejected(ctx, tx, o.ID, reason); err != nil {
 				return err
@@ -167,6 +176,23 @@ func (e *Engine) ProcessSimulationDay(ctx context.Context, simulationID uuid.UUI
 	tradeDay := tradeDate.UTC().Truncate(24 * time.Hour)
 
 	for _, aid := range agents {
+		status, err := e.PM.AgentStatusTx(ctx, tx, simulationID, aid)
+		if err != nil {
+			return err
+		}
+		if status == portfolio.StatusDisqualified {
+			total, cash, invested, ok, err := e.PM.LastSnapshotTx(ctx, tx, simulationID, aid)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if err := e.PM.UpsertSnapshotTx(ctx, tx, simulationID, aid, tradeDay, total, cash, invested); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
 		pid, err := e.PM.PortfolioIDTx(ctx, tx, simulationID, aid)
 		if err != nil {
 			return err
@@ -193,6 +219,18 @@ func (e *Engine) ProcessSimulationDay(ctx context.Context, simulationID uuid.UUI
 		}
 		if err := e.PM.UpsertSnapshotTx(ctx, tx, simulationID, aid, tradeDay, total, cash, invested); err != nil {
 			return err
+		}
+		if total <= 0 {
+			if err := e.PM.SetDisqualifiedTx(ctx, tx, simulationID, aid); err != nil {
+				return err
+			}
+			redisPayloads = append(redisPayloads, map[string]any{
+				"event":         "agent.disqualified",
+				"simulation_id": simulationID.String(),
+				"agent_id":      aid.String(),
+				"reason":        "portfolio_value_zero",
+				"date":          tradeDay.Format(time.DateOnly),
+			})
 		}
 	}
 
@@ -222,14 +260,15 @@ func (e *Engine) tryFillOrder(
 	prevCloseCache map[string]float64,
 	redisPayloads *[]map[string]any,
 ) string {
+	status, err := e.PM.AgentStatusTx(ctx, tx, simulationID, o.AgentID)
+	if err == nil && status == portfolio.StatusDisqualified {
+		return "agent_disqualified"
+	}
 	if breakerOn[o.Symbol] {
 		return "circuit_breaker_triggered"
 	}
 	if !universe.IsNifty50(o.Symbol) {
 		return "invalid_symbol"
-	}
-	if strings.EqualFold(o.OrderType, "market") == false {
-		return "order_type_not_supported"
 	}
 
 	barD, err := e.Data.BarOnDate(ctx, o.Symbol, tradeDate)
@@ -239,21 +278,33 @@ func (e *Engine) tryFillOrder(
 		}
 		return "market_data_error"
 	}
-	open := barD.Open
-	if open < minStockPrice {
+	if BelowMinPrice(barD.Open) {
 		return "below_minimum_price"
 	}
 
-	maxQty := int(math.Floor(0.01 * float64(prevVol[o.Symbol])))
-	if o.Quantity > maxQty {
+	if LiquidityExceeded(o.Quantity, prevVol[o.Symbol]) {
 		return "liquidity_limit_exceeded"
 	}
 
+	limitPx := 0.0
+	if o.Price != nil {
+		limitPx = *o.Price
+	}
+	fillPx, decision, reason := ResolveFill(o.OrderType, o.Side, limitPx, barD)
+	switch decision {
+	case DeferFill:
+		return ReasonDefer
+	case RejectFill:
+		return reason
+	}
+
+	fillPx = ApplyMarketImpact(o.Side, o.Quantity, prevVol[o.Symbol], fillPx)
+
 	switch strings.ToLower(strings.TrimSpace(o.Side)) {
 	case "buy":
-		return e.fillBuy(ctx, tx, simulationID, tradeDate, o, open, prevCloseCache, redisPayloads)
+		return e.fillBuy(ctx, tx, simulationID, tradeDate, o, fillPx, prevCloseCache, redisPayloads)
 	case "sell":
-		return e.fillSell(ctx, tx, simulationID, tradeDate, o, open, redisPayloads)
+		return e.fillSell(ctx, tx, simulationID, tradeDate, o, fillPx, redisPayloads)
 	default:
 		return "invalid_side"
 	}
@@ -265,7 +316,7 @@ func (e *Engine) fillBuy(
 	simulationID uuid.UUID,
 	tradeDate time.Time,
 	o orders.Row,
-	open float64,
+	fillPx float64,
 	prevCloseCache map[string]float64,
 	redisPayloads *[]map[string]any,
 ) string {
@@ -292,15 +343,16 @@ func (e *Engine) fillBuy(
 		return "portfolio_error"
 	}
 
-	tradeVal := float64(o.Quantity) * open
-	totalDebit, feeTotal := fees.BuyDebit(tradeVal)
+	tradeVal := float64(o.Quantity) * fillPx
+	br := fees.BuyFees(tradeVal)
+	totalDebit := br.TotalDebit(tradeVal)
 	if cash < totalDebit {
 		return "insufficient_cash"
 	}
 
 	h := holdings[o.Symbol]
 	newStockExposure := float64(h.Quantity+o.Quantity) * prevSym
-	if pv > 0 && newStockExposure > concentrationPct*pv+1e-9 {
+	if ConcentrationExceeded(newStockExposure, pv) {
 		return "concentration_limit_exceeded"
 	}
 
@@ -308,10 +360,10 @@ func (e *Engine) fillBuy(
 	if err := e.PM.SetCashTx(ctx, tx, pid, newCash); err != nil {
 		return "portfolio_error"
 	}
-	if err := e.PM.UpsertHoldingAfterBuy(ctx, tx, pid, o.Symbol, o.Quantity, open); err != nil {
+	if err := e.PM.UpsertHoldingAfterBuy(ctx, tx, pid, o.Symbol, o.Quantity, fillPx); err != nil {
 		return "portfolio_error"
 	}
-	if err := orders.MarkFilled(ctx, tx, o.ID, open, tradeDate.UTC(), feeTotal, tradeVal); err != nil {
+	if err := orders.MarkFilled(ctx, tx, o.ID, fillPx, tradeDate.UTC(), br, tradeVal); err != nil {
 		return "persist_error"
 	}
 	*redisPayloads = append(*redisPayloads, map[string]any{
@@ -322,8 +374,9 @@ func (e *Engine) fillBuy(
 		"symbol":        o.Symbol,
 		"side":          "buy",
 		"quantity":      o.Quantity,
-		"filled_price":  open,
-		"fees_total":    feeTotal,
+		"filled_price":  fillPx,
+		"fees_total":    br.Total,
+		"fees":          br,
 		"trade_value":   tradeVal,
 		"match_on_date": tradeDate.UTC().Format(time.DateOnly),
 	})
@@ -336,7 +389,7 @@ func (e *Engine) fillSell(
 	simulationID uuid.UUID,
 	tradeDate time.Time,
 	o orders.Row,
-	open float64,
+	fillPx float64,
 	redisPayloads *[]map[string]any,
 ) string {
 	pid, err := e.PM.PortfolioIDTx(ctx, tx, simulationID, o.AgentID)
@@ -351,8 +404,9 @@ func (e *Engine) fillSell(
 		return "insufficient_holdings"
 	}
 
-	tradeVal := float64(o.Quantity) * open
-	credit, feeTotal := fees.SellCredit(tradeVal)
+	tradeVal := float64(o.Quantity) * fillPx
+	br := fees.SellFees(tradeVal)
+	credit := br.TotalCredit(tradeVal)
 
 	cash, err := e.PM.GetCashTx(ctx, tx, pid)
 	if err != nil {
@@ -364,7 +418,7 @@ func (e *Engine) fillSell(
 	if err := e.PM.ReduceHoldingAfterSell(ctx, tx, pid, o.Symbol, o.Quantity); err != nil {
 		return "portfolio_error"
 	}
-	if err := orders.MarkFilled(ctx, tx, o.ID, open, tradeDate.UTC(), feeTotal, tradeVal); err != nil {
+	if err := orders.MarkFilled(ctx, tx, o.ID, fillPx, tradeDate.UTC(), br, tradeVal); err != nil {
 		return "persist_error"
 	}
 	*redisPayloads = append(*redisPayloads, map[string]any{
@@ -375,8 +429,9 @@ func (e *Engine) fillSell(
 		"symbol":        o.Symbol,
 		"side":          "sell",
 		"quantity":      o.Quantity,
-		"filled_price":  open,
-		"fees_total":    feeTotal,
+		"filled_price":  fillPx,
+		"fees_total":    br.Total,
+		"fees":          br,
 		"trade_value":   tradeVal,
 		"net_credit":    credit,
 		"match_on_date": tradeDate.UTC().Format(time.DateOnly),
