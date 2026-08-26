@@ -41,10 +41,13 @@ CREATE TABLE simulations (
 );
 
 CREATE TABLE portfolios (
-    id              BIGSERIAL PRIMARY KEY,
-    simulation_id   UUID REFERENCES simulations(id),
-    agent_id        UUID REFERENCES agents(id),
-    cash            NUMERIC(15,4),
+    id                         BIGSERIAL PRIMARY KEY,
+    simulation_id              UUID REFERENCES simulations(id),
+    agent_id                   UUID REFERENCES agents(id),
+    cash                       NUMERIC(15,4),
+    status                     VARCHAR(20) NOT NULL DEFAULT 'active',
+    consecutive_missed_ticks   INT NOT NULL DEFAULT 0,
+    consecutive_4xx            INT NOT NULL DEFAULT 0,
     UNIQUE(simulation_id, agent_id)
 );
 
@@ -73,6 +76,12 @@ CREATE TABLE orders (
     match_on_date   DATE,
     fees_total      NUMERIC(15,4),
     trade_value     NUMERIC(15,4),
+    fee_brokerage   NUMERIC(15,4),
+    fee_stt         NUMERIC(15,4),
+    fee_gst         NUMERIC(15,4),
+    fee_exchange    NUMERIC(15,4),
+    fee_sebi        NUMERIC(15,4),
+    fee_stamp       NUMERIC(15,4),
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_orders_sim_match_pending ON orders(simulation_id, match_on_date, status)

@@ -1,45 +1,344 @@
 openapi: 3.0.3
 info:
-  title: Trading simulation platform — API sketch
-  version: 0.1.0
+  title: Market simulator API
+  version: 1.0.0
   description: |
-    Phase 0 placeholder. The **market-simulator** (Go) and **agent-orchestrator** (FastAPI)
-    each expose `GET /health` on their own host/port. Expand this spec as REST routes land.
+    Go market-simulator REST + WebSocket API. Agent-authenticated routes require
+    `X-Agent-ID` and `X-API-Key`. See `docs/rules.md` for matching and portfolio rules.
 
 servers:
   - url: http://localhost:8070
     description: Market simulator (Go)
-  - url: http://localhost:8071
-    description: Agent orchestrator (Python)
 
 tags:
   - name: Health
-    description: Liveness probes
+  - name: Simulations
+  - name: Agents
+  - name: Market
+  - name: Dashboard
+  - name: Live
 
 paths:
   /health:
     get:
       tags: [Health]
       summary: Service health
-      description: |
-        Available on **both** services: port 8070 (simulator) and 8071 (orchestrator).
       responses:
         "200":
           description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-              examples:
-                simulator:
-                  summary: Market simulator
-                  value:
-                    status: ok
-                    service: market-simulator
-                orchestrator:
-                  summary: Agent orchestrator
-                  value:
-                    status: ok
-                    service: agent-orchestrator
-                    market_simulator_url: http://market-simulator:8070
+
+  /api/v1/simulations:
+    get:
+      tags: [Simulations]
+      summary: List simulations
+      responses:
+        "200":
+          description: Simulation list
+    post:
+      tags: [Simulations]
+      summary: Create a simulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, start_date, end_date]
+              properties:
+                name: { type: string }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+                config: { type: object }
+      responses:
+        "201":
+          description: Created
+
+  /api/v1/simulations/{id}:
+    get:
+      tags: [Simulations]
+      summary: Get simulation + clock state
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Simulation
+    patch:
+      tags: [Simulations]
+      summary: Merge simulation config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated
+
+  /api/v1/simulations/{id}/start:
+    post:
+      tags: [Simulations]
+      summary: Start or resume the virtual clock
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Started
+
+  /api/v1/simulations/{id}/pause:
+    post:
+      tags: [Simulations]
+      summary: Pause the clock
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Paused
+
+  /api/v1/simulations/{id}/proceed:
+    post:
+      tags: [Simulations]
+      summary: Continue after a checkpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Proceeded
+
+  /api/v1/simulations/{id}/tick:
+    post:
+      tags: [Simulations]
+      summary: Advance one trading day (opens submission window, then matches)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Tick accepted
+
+  /api/v1/simulations/{id}/config:
+    patch:
+      tags: [Simulations]
+      summary: Patch JSON config (window, auto-tick, speed)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated
+
+  /api/v1/simulations/{id}/agents:
+    post:
+      tags: [Agents]
+      summary: Register an agent (returns API key once) and Day-0 snapshot
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Agent created
+
+  /api/v1/sim/speed:
+    put:
+      tags: [Simulations]
+      summary: Set tick_speed_multiplier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [simulation_id, multiplier]
+              properties:
+                simulation_id: { type: string, format: uuid }
+                multiplier: { type: number }
+      responses:
+        "200":
+          description: Updated
+
+  /api/v1/leaderboard/{simId}:
+    get:
+      tags: [Dashboard]
+      summary: Ranked agents with Sharpe, drawdown, win rate, turnover, sector exposure
+      parameters:
+        - in: path
+          name: simId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Leaderboard
+
+  /api/v1/dashboard/simulations/{simId}/equity-curves:
+    get:
+      tags: [Dashboard]
+      parameters:
+        - in: path
+          name: simId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Equity curves
+
+  /api/v1/dashboard/simulations/{simId}/orders:
+    get:
+      tags: [Dashboard]
+      parameters:
+        - in: path
+          name: simId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Recent orders
+
+  /api/v1/live/stream:
+    get:
+      tags: [Live]
+      summary: WebSocket live events from Redis sim.events
+      parameters:
+        - in: query
+          name: simulation_id
+          schema: { type: string, format: uuid }
+      responses:
+        "101":
+          description: Switching Protocols
+        "503":
+          description: Redis not configured
+
+  /api/v1/orders:
+    post:
+      tags: [Agents]
+      summary: Place market, limit, or stop order
+      security: [{ AgentAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [simulation_id, agent_id, symbol, order_type, side, quantity]
+              properties:
+                simulation_id: { type: string, format: uuid }
+                agent_id: { type: string, format: uuid }
+                symbol: { type: string, example: TCS.NS }
+                order_type: { type: string, enum: [market, limit, stop] }
+                side: { type: string, enum: [buy, sell] }
+                quantity: { type: integer, minimum: 1 }
+                price: { type: number, description: Required for limit and stop }
+      responses:
+        "201":
+          description: Pending order created
+
+  /api/v1/portfolio/{agentId}:
+    get:
+      tags: [Agents]
+      security: [{ AgentAuth: [] }]
+      parameters:
+        - in: path
+          name: agentId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: simulation_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Mark-to-market portfolio
+
+  /api/v1/market/quote/{symbol}:
+    get:
+      tags: [Market]
+      security: [{ AgentAuth: [] }]
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string }
+        - in: query
+          name: simulation_id
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Quote as-of simulation clock
+
+  /api/v1/market/ohlcv/{symbol}:
+    get:
+      tags: [Market]
+      security: [{ AgentAuth: [] }]
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string }
+        - in: query
+          name: simulation_id
+          schema: { type: string, format: uuid }
+        - in: query
+          name: days
+          schema: { type: integer, default: 20 }
+      responses:
+        "200":
+          description: Historical bars up to as_of_date
+
+  /api/v1/orders/{agentId}:
+    get:
+      tags: [Agents]
+      security: [{ AgentAuth: [] }]
+      parameters:
+        - in: path
+          name: agentId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: simulation_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Order history with fee breakdown
+
+  /api/v1/orders/{orderId}:
+    delete:
+      tags: [Agents]
+      summary: Cancel a pending order
+      security: [{ AgentAuth: [] }]
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: simulation_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Canceled
+
+components:
+  securitySchemes:
+    AgentAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Also send X-Agent-ID. Rate limit 100 calls per simulation tick.
