@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class Order(BaseModel):
     symbol: str
     side: Literal["buy", "sell"]
-    order_type: Literal["market", "limit"] = "market"
+    order_type: Literal["market", "limit", "stop"] = "market"
     quantity: int = Field(gt=0)
     price: float | None = None
 
