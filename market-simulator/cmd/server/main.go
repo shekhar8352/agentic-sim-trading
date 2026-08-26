@@ -29,6 +29,12 @@ func main() {
 		defer pool.Close()
 	}
 
+	if pool != nil {
+		if err := db.Migrate(ctx, pool); err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
+	}
+
 	rdb := redisconn.New()
 
 	data := market.NewData(pool)
@@ -38,9 +44,13 @@ func main() {
 		matcher = orderbook.NewEngine(pool, data, pm, rdb)
 	}
 	reg := clock.NewRegistry(pool, rdb, data, matcher)
+	reg.SetPortfolioManager(pm)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if err := reg.ResumePersisted(ctx); err != nil {
+		log.Printf("resume clocks: %v", err)
+	}
 	go reg.RunAutoTicker(ctx)
 
 	h := &api.Handler{

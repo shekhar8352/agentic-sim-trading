@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentic-sim-trading/market-simulator/internal/agents"
+	"github.com/agentic-sim-trading/market-simulator/internal/portfolio"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -102,6 +103,49 @@ func rateLimitKey(r *http.Request) string {
 		return "agent:" + id.String()
 	}
 	return "ip:" + strings.TrimSpace(r.RemoteAddr)
+}
+
+// RateLimitPerTick enforces 100 API calls per agent per simulation tick (rules §11.4)
+// and tracks consecutive 4xx for disqualification (rules §12).
+func (h *Handler) RateLimitPerTick(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agentID, ok := AgentIDFromContext(r.Context())
+		if ok && h.Clocks != nil {
+			simID := uuid.Nil
+			if h.Portfolio != nil {
+				if id, err := h.Portfolio.SimulationIDForAgent(r.Context(), agentID); err == nil {
+					simID = id
+				}
+			}
+			if sid := strings.TrimSpace(r.URL.Query().Get("simulation_id")); sid != "" {
+				if parsed, err := uuid.Parse(sid); err == nil {
+					simID = parsed
+				}
+			}
+			if simID != uuid.Nil && !h.Clocks.AllowAPICall(simID, agentID) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"detail": "rate limit exceeded (100 requests per tick)"})
+				return
+			}
+		}
+
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+
+		if !ok || h.Portfolio == nil {
+			return
+		}
+		st := ww.Status()
+		if st >= 400 && st < 500 && st != http.StatusUnauthorized && st != http.StatusTooManyRequests {
+			simID, n, err := h.Portfolio.Increment4xx(r.Context(), agentID)
+			if err == nil && n >= portfolio.Consecutive4xxDQ && simID != uuid.Nil {
+				_ = h.Portfolio.SetDisqualified(r.Context(), simID, agentID)
+			}
+			return
+		}
+		if st >= 200 && st < 400 {
+			_ = h.Portfolio.Reset4xx(r.Context(), agentID)
+		}
+	})
 }
 
 // RateLimitPerAgent enforces max requests per window keyed by authenticated agent (or IP).

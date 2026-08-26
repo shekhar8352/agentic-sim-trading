@@ -1,8 +1,6 @@
 package api
 
 import (
-	"time"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -46,7 +44,7 @@ func NewRouter(h *Handler) chi.Router {
 
 		r.Group(func(r chi.Router) {
 			r.Use(AgentAuth(h.DB))
-			r.Use(RateLimitPerAgent(100, time.Minute))
+			r.Use(h.RateLimitPerTick)
 			r.Post("/orders", h.PlaceOrder)
 			r.Get("/portfolio/{agentId}", h.GetPortfolio)
 			r.Get("/market/quote/{symbol}", h.GetQuote)

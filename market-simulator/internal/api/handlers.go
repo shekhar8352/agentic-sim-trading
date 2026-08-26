@@ -102,6 +102,7 @@ func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		OrderType    string    `json:"order_type"`
 		Side         string    `json:"side"`
 		Quantity     int       `json:"quantity"`
+		Price        *float64  `json:"price"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "invalid JSON body"})
@@ -118,31 +119,48 @@ func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	if agentAccessDeniedFromRequest(w, r, req.AgentID) {
 		return
 	}
-	if err := validation.MarketOrder(req.Symbol, req.OrderType, req.Side, req.Quantity); err != nil {
+	if err := validation.Order(req.Symbol, req.OrderType, req.Side, req.Quantity, req.Price); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
 		return
 	}
 
 	c, ok := h.Clocks.ActiveClock(req.SimulationID)
-	if !ok || c.Status != "running" {
-		writeJSON(w, http.StatusConflict, map[string]string{"detail": "simulation clock must be running"})
+	if !ok || (c.Status != "running" && c.Status != "paused") {
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": "simulation clock must be running or paused"})
+		return
+	}
+	if c.Status == "completed" {
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": "simulation is completed"})
 		return
 	}
 
+	if h.Portfolio != nil {
+		if dq, err := h.Portfolio.IsDisqualified(r.Context(), req.SimulationID, req.AgentID); err == nil && dq {
+			writeJSON(w, http.StatusConflict, map[string]string{"detail": "agent is disqualified"})
+			return
+		}
+	}
+
 	if !h.Clocks.TryAcceptOrderSubmission(req.SimulationID, req.AgentID) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"detail": "order submission limit (10) reached until next processed tick"})
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"detail": "tick_order_limit_exceeded"})
 		return
 	}
 
 	asOf := c.CurrentDate.UTC().Truncate(24 * time.Hour)
-	matchOn, err := h.Market.NextTradingDay(r.Context(), asOf)
-	if err != nil || matchOn.IsZero() {
-		h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "no next trading day after current simulation date"})
-		return
+	var matchOn time.Time
+	if h.Clocks.OrderFillsOnCurrentDate(req.SimulationID) {
+		matchOn = asOf
+	} else {
+		next, err := h.Market.NextTradingDay(r.Context(), asOf)
+		if err != nil || next.IsZero() {
+			h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "no next trading day after current simulation date"})
+			return
+		}
+		matchOn = next
 	}
 
-	id, err := orders.InsertPending(r.Context(), h.DB, req.SimulationID, req.AgentID, req.Symbol, req.OrderType, req.Side, req.Quantity, matchOn)
+	id, err := orders.InsertPending(r.Context(), h.DB, req.SimulationID, req.AgentID, req.Symbol, req.OrderType, req.Side, req.Quantity, req.Price, matchOn)
 	if err != nil {
 		h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "failed to persist order"})
@@ -485,6 +503,19 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "portfolio insert failed"})
 		return
 	}
+	simRow, err := simulation.Get(ctx, h.DB, simID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "simulation lookup failed"})
+		return
+	}
+	pm := h.Portfolio
+	if pm == nil {
+		pm = portfolio.NewManager(h.DB)
+	}
+	if err := pm.InsertDay0Snapshot(ctx, tx, simID, agentID, simRow.StartDate); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "day-0 snapshot failed"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "commit failed"})
 		return
@@ -570,6 +601,7 @@ func (h *Handler) GetSimulation(w http.ResponseWriter, r *http.Request) {
 		"awaiting_proceed":         simulation.AwaitingProceed(row.Config),
 		"auto_tick_enabled":        simulation.AutoTickEnabled(row.Config),
 		"tick_interval_seconds":    simulation.TickIntervalSeconds(row.Config),
+		"order_window_seconds":     simulation.OrderWindowSeconds(row.Config),
 		"has_as_of":                row.AsOfDate != nil,
 		"clock_loaded":             false,
 	}
