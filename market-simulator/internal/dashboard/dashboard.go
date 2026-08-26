@@ -11,11 +11,11 @@ import (
 
 // EquityPoint is one EOD portfolio value for charting.
 type EquityPoint struct {
-	Date        string  `json:"date"`
-	TotalValue  float64 `json:"total_value"`
-	Cash        float64 `json:"cash"`
-	Invested    float64 `json:"invested_value"`
-	ReturnPct   float64 `json:"return_pct"`
+	Date       string  `json:"date"`
+	TotalValue float64 `json:"total_value"`
+	Cash       float64 `json:"cash"`
+	Invested   float64 `json:"invested_value"`
+	ReturnPct  float64 `json:"return_pct"`
 }
 
 // AgentEquityCurve groups snapshot series for one agent.
@@ -84,17 +84,17 @@ func EquityCurves(ctx context.Context, pool *pgxpool.Pool, simulationID uuid.UUI
 
 // OrderRow is a recent order for the live feed.
 type OrderRow struct {
-	ID           string  `json:"id"`
-	AgentID      string  `json:"agent_id"`
-	AgentName    string  `json:"agent_name"`
-	Symbol       string  `json:"symbol"`
-	Side         string  `json:"side"`
-	Quantity     int     `json:"quantity"`
-	Status       string  `json:"status"`
+	ID           string   `json:"id"`
+	AgentID      string   `json:"agent_id"`
+	AgentName    string   `json:"agent_name"`
+	Symbol       string   `json:"symbol"`
+	Side         string   `json:"side"`
+	Quantity     int      `json:"quantity"`
+	Status       string   `json:"status"`
 	FilledPrice  *float64 `json:"filled_price,omitempty"`
-	MatchOnDate  *string `json:"match_on_date,omitempty"`
-	RejectReason *string `json:"rejection_reason,omitempty"`
-	CreatedAt    string  `json:"created_at"`
+	MatchOnDate  *string  `json:"match_on_date,omitempty"`
+	RejectReason *string  `json:"rejection_reason,omitempty"`
+	CreatedAt    string   `json:"created_at"`
 }
 
 // RecentOrders returns the latest orders across all agents in a simulation.
@@ -180,17 +180,18 @@ func ListAgents(ctx context.Context, pool *pgxpool.Pool, simulationID uuid.UUID)
 	return out, rows.Err()
 }
 
-// AgentMetrics extends leaderboard stats with win-rate proxy.
+// AgentMetrics extends leaderboard stats with closed-trade win rate and turnover.
 type AgentMetrics struct {
-	AgentID            uuid.UUID `json:"agent_id"`
-	AgentName          string    `json:"agent_name"`
-	TotalReturnPct     float64   `json:"total_return_pct"`
-	SharpeRatio        float64   `json:"sharpe_ratio"`
-	MaxDrawdownPct     float64   `json:"max_drawdown_pct"`
-	WinRatePct         float64   `json:"win_rate_pct"`
-	AvgHoldingDays     float64   `json:"avg_holding_days"`
-	TotalFilledOrders  int       `json:"total_filled_orders"`
-	TotalRejectedOrders int      `json:"total_rejected_orders"`
+	AgentID             uuid.UUID `json:"agent_id"`
+	AgentName           string    `json:"agent_name"`
+	TotalReturnPct      float64   `json:"total_return_pct"`
+	SharpeRatio         float64   `json:"sharpe_ratio"`
+	MaxDrawdownPct      float64   `json:"max_drawdown_pct"`
+	WinRatePct          float64   `json:"win_rate_pct"`
+	AvgHoldingDays      float64   `json:"avg_holding_days"`
+	TurnoverRate        float64   `json:"turnover_rate"`
+	TotalFilledOrders   int       `json:"total_filled_orders"`
+	TotalRejectedOrders int       `json:"total_rejected_orders"`
 }
 
 // BuildAgentMetrics computes performance metrics for one agent.
@@ -235,21 +236,6 @@ func BuildAgentMetrics(ctx context.Context, pool *pgxpool.Pool, simulationID, ag
 		retPct = (values[len(values)-1] - portfolio.StartingCapitalINR) / portfolio.StartingCapitalINR * 100
 	}
 
-	positiveDays, totalDays := 0, 0
-	for i := 1; i < len(values); i++ {
-		if values[i-1] == 0 {
-			continue
-		}
-		totalDays++
-		if values[i] > values[i-1] {
-			positiveDays++
-		}
-	}
-	winRate := 0.0
-	if totalDays > 0 {
-		winRate = float64(positiveDays) / float64(totalDays) * 100
-	}
-
 	var filled, rejected int
 	if err := pool.QueryRow(ctx, `
 		SELECT
@@ -260,13 +246,33 @@ func BuildAgentMetrics(ctx context.Context, pool *pgxpool.Pool, simulationID, ag
 		return nil, err
 	}
 
-	avgHold := 0.0
-	if filled > 0 {
-		avgHold = float64(len(values)) / float64(filled)
-		if avgHold < 1 {
-			avgHold = 1
-		}
+	fillRows, err := pool.Query(ctx, `
+		SELECT symbol, side, quantity, COALESCE(filled_price, 0)::float8,
+		       COALESCE(trade_value, 0)::float8, filled_at
+		FROM orders
+		WHERE simulation_id = $1 AND agent_id = $2 AND status = 'filled' AND filled_at IS NOT NULL
+		ORDER BY filled_at, created_at
+	`, simulationID, agentID)
+	if err != nil {
+		return nil, err
 	}
+	var fills []portfolio.FillLot
+	for fillRows.Next() {
+		var lot portfolio.FillLot
+		var filledAt time.Time
+		if err := fillRows.Scan(&lot.Symbol, &lot.Side, &lot.Quantity, &lot.Price, &lot.TradeVal, &filledAt); err != nil {
+			fillRows.Close()
+			return nil, err
+		}
+		lot.FilledAt = filledAt.UTC()
+		fills = append(fills, lot)
+	}
+	fillRows.Close()
+	if err := fillRows.Err(); err != nil {
+		return nil, err
+	}
+	closed := portfolio.AnalyzeClosedTrades(fills)
+	turnover := portfolio.TurnoverRate(closed.TotalTradeValue, es)
 
 	return &AgentMetrics{
 		AgentID:             agentID,
@@ -274,8 +280,9 @@ func BuildAgentMetrics(ctx context.Context, pool *pgxpool.Pool, simulationID, ag
 		TotalReturnPct:      retPct,
 		SharpeRatio:         sharpe,
 		MaxDrawdownPct:      mdd,
-		WinRatePct:          winRate,
-		AvgHoldingDays:      avgHold,
+		WinRatePct:          closed.WinRatePct,
+		AvgHoldingDays:      closed.AvgHoldingDays,
+		TurnoverRate:        turnover,
 		TotalFilledOrders:   filled,
 		TotalRejectedOrders: rejected,
 	}, nil

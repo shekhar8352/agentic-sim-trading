@@ -11,14 +11,23 @@ import (
 
 // RunAutoTicker advances running simulations on a wall-clock interval (demo mode).
 func (r *Registry) RunAutoTicker(ctx context.Context) {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			r.closeExpiredWindows(ctx)
 			r.runDueAutoTicks(ctx)
+		}
+	}
+}
+
+func (r *Registry) closeExpiredWindows(ctx context.Context) {
+	for _, id := range r.windowsDue(time.Now()) {
+		if err := r.CloseWindowAndMatch(ctx, id); err != nil {
+			log.Printf("close-window simulation_id=%s err=%v", id, err)
 		}
 	}
 }
@@ -31,7 +40,7 @@ func (r *Registry) runDueAutoTicks(ctx context.Context) {
 	r.mu.Lock()
 	ids := make([]uuid.UUID, 0, len(r.clocks))
 	for id, c := range r.clocks {
-		if c.Status == "running" {
+		if c.Status == "running" && !r.windows[id].Open {
 			ids = append(ids, id)
 		}
 	}
@@ -46,7 +55,7 @@ func (r *Registry) runDueAutoTicks(ctx context.Context) {
 		if !simulation.AutoTickEnabled(row.Config) || simulation.AwaitingProceed(row.Config) {
 			continue
 		}
-		interval := time.Duration(simulation.TickIntervalSeconds(row.Config) * float64(time.Second))
+		interval := time.Duration(simulation.EffectiveTickInterval(row.Config) * float64(time.Second))
 
 		r.mu.Lock()
 		last, ok := r.lastAutoTick[id]
@@ -109,6 +118,11 @@ func (r *Registry) maybeCheckpoint(ctx context.Context, simulationID uuid.UUID, 
 	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.CurrentDate, "paused"); err != nil {
 		return err
 	}
+	r.mu.Lock()
+	w := r.windows[simulationID]
+	w.Open = false
+	r.windows[simulationID] = w
+	r.mu.Unlock()
 	return r.publish(ctx, "sim.checkpoint", map[string]any{
 		"simulation_id":            simulationID.String(),
 		"date":                     c.CurrentDate.Format(time.DateOnly),
