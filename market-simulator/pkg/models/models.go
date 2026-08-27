@@ -18,6 +18,7 @@ type OrderType string
 const (
 	OrderTypeMarket OrderType = "market"
 	OrderTypeLimit  OrderType = "limit"
+	OrderTypeStop   OrderType = "stop"
 )
 
 type OrderStatus string
@@ -31,19 +32,19 @@ const (
 
 // Order is the domain shape aligned with init.sql `orders` plus IDs.
 type Order struct {
-	ID            uuid.UUID   `json:"id"`
-	SimulationID  uuid.UUID   `json:"simulation_id"`
-	AgentID       uuid.UUID   `json:"agent_id"`
-	Symbol        string      `json:"symbol"`
-	OrderType     OrderType   `json:"order_type"`
-	Side          Side        `json:"side"`
-	Quantity      int         `json:"quantity"`
-	Price         float64     `json:"price,omitempty"`
-	Status        OrderStatus `json:"status"`
-	FilledPrice   float64     `json:"filled_price,omitempty"`
-	FilledAt      *time.Time  `json:"filled_at,omitempty"`
-	RejectReason  string      `json:"rejection_reason,omitempty"`
-	CreatedAt     time.Time   `json:"created_at,omitempty"`
+	ID           uuid.UUID   `json:"id"`
+	SimulationID uuid.UUID   `json:"simulation_id"`
+	AgentID      uuid.UUID   `json:"agent_id"`
+	Symbol       string      `json:"symbol"`
+	OrderType    OrderType   `json:"order_type"`
+	Side         Side        `json:"side"`
+	Quantity     int         `json:"quantity"`
+	Price        float64     `json:"price,omitempty"`
+	Status       OrderStatus `json:"status"`
+	FilledPrice  float64     `json:"filled_price,omitempty"`
+	FilledAt     *time.Time  `json:"filled_at,omitempty"`
+	RejectReason string      `json:"rejection_reason,omitempty"`
+	CreatedAt    time.Time   `json:"created_at,omitempty"`
 }
 
 // Trade represents a fill record used by the matching engine and Redis events.
