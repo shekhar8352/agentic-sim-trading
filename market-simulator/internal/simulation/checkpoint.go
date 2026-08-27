@@ -10,6 +10,7 @@ import (
 
 const defaultCheckpointIntervalDays = 5
 const defaultTickIntervalSeconds = 5.0
+const defaultOrderWindowSeconds = 3.0
 
 // DefaultConfig is applied to new simulations so long runs pause for user approval.
 func DefaultConfig() json.RawMessage {
@@ -19,6 +20,8 @@ func DefaultConfig() json.RawMessage {
 		"awaiting_proceed":         false,
 		"auto_tick_enabled":        true,
 		"tick_interval_seconds":    defaultTickIntervalSeconds,
+		"order_window_seconds":     defaultOrderWindowSeconds,
+		"tick_speed_multiplier":    1.0,
 	})
 	return b
 }
@@ -84,6 +87,55 @@ func TickIntervalSeconds(cfg json.RawMessage) float64 {
 		return 3600
 	}
 	return x
+}
+
+// OrderWindowSeconds is how long agents may submit after sim.tick (0 = batch / immediate match).
+func OrderWindowSeconds(cfg json.RawMessage) float64 {
+	m := configMap(cfg)
+	x, ok := m["order_window_seconds"].(float64)
+	if !ok {
+		return defaultOrderWindowSeconds
+	}
+	if x < 0 {
+		return 0
+	}
+	if x > 120 {
+		return 120
+	}
+	return x
+}
+
+// EffectiveTickInterval applies tick_speed_multiplier to the configured auto-tick delay.
+func EffectiveTickInterval(cfg json.RawMessage) float64 {
+	mult := TickSpeedMultiplier(cfg)
+	if mult <= 0 {
+		mult = 1
+	}
+	iv := TickIntervalSeconds(cfg) / mult
+	if iv < 0.05 {
+		return 0.05
+	}
+	return iv
+}
+
+// EffectiveOrderWindow applies tick_speed_multiplier to the submission window.
+func EffectiveOrderWindow(cfg json.RawMessage) float64 {
+	mult := TickSpeedMultiplier(cfg)
+	if mult <= 0 {
+		mult = 1
+	}
+	w := OrderWindowSeconds(cfg) / mult
+	if w < 0 {
+		return 0
+	}
+	return w
+}
+
+// LastMatchedDate reads config.last_matched_date (YYYY-MM-DD) when present.
+func LastMatchedDate(cfg json.RawMessage) string {
+	m := configMap(cfg)
+	s, _ := m["last_matched_date"].(string)
+	return s
 }
 
 func mergeConfigFragment(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fragment map[string]any) error {

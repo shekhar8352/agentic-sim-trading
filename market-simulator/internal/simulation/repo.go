@@ -123,3 +123,24 @@ func MergeConfig(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fragment
 	}
 	return nil
 }
+
+// ListIDsByStatus returns simulation IDs with the given status (for clock resume).
+func ListIDsByStatus(ctx context.Context, pool *pgxpool.Pool, status string) ([]uuid.UUID, error) {
+	if pool == nil {
+		return nil, errors.New("database not configured")
+	}
+	rows, err := pool.Query(ctx, `SELECT id FROM simulations WHERE status = $1`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
