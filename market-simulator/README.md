@@ -43,17 +43,17 @@ Without `DATABASE_URL`, `/health` still returns OK; quote/OHLCV endpoints respon
 
 ## Tick pipeline (rules §4)
 
-1. Clock advances to trading date **D** (first tick processes the start date).
-2. Publish `sim.tick` on Redis channel `sim.events`.
+1. Clock advances to trading date **D** (or the next 60m bar when `config.bar_interval` is `60m`).
+2. Publish `sim.tick` on Redis channel `sim.events` (`date`, and in hourly mode `bar_ts`, `session_bar`, `session_bars`).
 3. Agents submit orders during `order_window_seconds` (default 3s; `0` = batch / immediate match).
-4. Window closes; pending orders for **D** fill at that day's open (limits/stops may defer).
-5. EOD snapshots; publish `sim.tick.processed`.
+4. Window closes; pending orders match against that day's open (daily) or the hour bar path (hourly: VWAP, limits/stops, partials).
+5. Snapshots at session close; publish `sim.tick.processed`.
 
 `tick_speed_multiplier` scales both the auto-tick interval and the order window.
 
 ## Simulation clock
 
-Trading days are derived from **distinct `ohlcv.date`** values between each simulation’s `start_date` and `end_date`.
+Trading days are derived from **distinct `ohlcv.date`** values between each simulation’s `start_date` and `end_date`. Hourly simulations (`bar_interval: 60m`) tick **distinct `ohlcv_bars.ts`** values instead (ingest with `python -m scripts.ingest_data --interval 60m`; Yahoo keeps ~730 days of 60m history).
 
 | Method | Path | Purpose |
 | -------- | ---- | ------- |

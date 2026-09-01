@@ -60,7 +60,12 @@ export interface SimulationDetail {
   end_date: string
   db_status: string
   as_of_date?: string
+  as_of_ts?: string
   current_trading_day?: string
+  bar_ts?: string
+  session_bar?: number
+  session_bars?: number
+  interval?: string
   clock_status?: string
   clock_loaded?: boolean
   trading_day_index?: number
@@ -115,6 +120,7 @@ export interface OrderRow {
   status: string
   filled_price?: number
   match_on_date?: string
+  filled_at_ts?: string
   rejection_reason?: string
   created_at: string
 }
@@ -138,6 +144,7 @@ export interface PortfolioDetail {
   simulation_id: string
   agent_id: string
   as_of_date: string
+  as_of_ts?: string
   cash: number
   holdings: HoldingDetail[]
   invested_value: number
@@ -168,7 +175,9 @@ export interface AgentOrder {
   status: string
   filled_price?: number
   filled_at?: string
+  filled_at_ts?: string
   match_on_date?: string
+  match_on_ts?: string
   rejection_reason?: string
   fees_total?: number
   trade_value?: number

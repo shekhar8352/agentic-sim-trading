@@ -59,7 +59,9 @@ export function SimulationLivePage() {
           <h1>{sim?.name ?? 'Simulation'}</h1>
           <div className="live-meta">
             <StatusBadge status={status} />
-            {sim?.current_trading_day ? (
+            {sim?.bar_ts ? (
+              <span className="tick-label">Tick: {sim.current_trading_day} {sim.bar_ts}</span>
+            ) : sim?.current_trading_day ? (
               <span className="tick-label">Tick: {sim.current_trading_day}</span>
             ) : null}
             {progress != null ? (
