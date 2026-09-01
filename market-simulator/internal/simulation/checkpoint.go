@@ -11,6 +11,12 @@ import (
 const defaultCheckpointIntervalDays = 5
 const defaultTickIntervalSeconds = 5.0
 const defaultOrderWindowSeconds = 3.0
+const defaultParticipationRate = 0.10
+const defaultMissedTicksDaily = 10
+const defaultMissedTicksHourly = 20
+
+const Interval1d = "1d"
+const Interval60m = "60m"
 
 // DefaultConfig is applied to new simulations so long runs pause for user approval.
 func DefaultConfig() json.RawMessage {
@@ -22,6 +28,7 @@ func DefaultConfig() json.RawMessage {
 		"tick_interval_seconds":    defaultTickIntervalSeconds,
 		"order_window_seconds":     defaultOrderWindowSeconds,
 		"tick_speed_multiplier":    1.0,
+		"bar_interval":             "1d",
 	})
 	return b
 }
@@ -136,6 +143,66 @@ func LastMatchedDate(cfg json.RawMessage) string {
 	m := configMap(cfg)
 	s, _ := m["last_matched_date"].(string)
 	return s
+}
+
+// BarInterval is "1d" (default) or "60m".
+func BarInterval(cfg json.RawMessage) string {
+	m := configMap(cfg)
+	s, _ := m["bar_interval"].(string)
+	switch s {
+	case Interval60m, "60min", "1h":
+		return Interval60m
+	default:
+		return Interval1d
+	}
+}
+
+// Hourly is true when the simulation ticks 60-minute bars.
+func Hourly(cfg json.RawMessage) bool {
+	return BarInterval(cfg) == Interval60m
+}
+
+// AsOfTS reads config.as_of_ts (RFC3339) when present.
+func AsOfTS(cfg json.RawMessage) string {
+	m := configMap(cfg)
+	s, _ := m["as_of_ts"].(string)
+	return s
+}
+
+// LastMatchedTS reads config.last_matched_ts (RFC3339) when present.
+func LastMatchedTS(cfg json.RawMessage) string {
+	m := configMap(cfg)
+	s, _ := m["last_matched_ts"].(string)
+	return s
+}
+
+// ParticipationRate is the max share of an hourly bar's volume one order slice may take (default 10%).
+func ParticipationRate(cfg json.RawMessage) float64 {
+	m := configMap(cfg)
+	x, ok := m["participation_rate"].(float64)
+	if !ok || x <= 0 {
+		return defaultParticipationRate
+	}
+	if x > 1 {
+		return 1
+	}
+	return x
+}
+
+// MissedTicksLimit is consecutive silent ticks before DQ.
+func MissedTicksLimit(cfg json.RawMessage) int {
+	m := configMap(cfg)
+	x, ok := m["missed_ticks_limit"].(float64)
+	if ok && x >= 1 {
+		if x > 200 {
+			return 200
+		}
+		return int(x)
+	}
+	if Hourly(cfg) {
+		return defaultMissedTicksHourly
+	}
+	return defaultMissedTicksDaily
 }
 
 func mergeConfigFragment(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fragment map[string]any) error {

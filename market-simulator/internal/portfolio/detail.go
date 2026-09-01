@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/agentic-sim-trading/market-simulator/internal/market"
 	"github.com/agentic-sim-trading/market-simulator/pkg/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,11 @@ const StartingCapitalINR = 1_000_000.0
 // BarLookup loads OHLCV for mark-to-market at the simulated calendar date.
 type BarLookup interface {
 	BarOnDate(ctx context.Context, symbol string, day time.Time) (models.Quote, error)
+}
+
+// IntradayMark is implemented by *market.Data for 60m portfolio marks.
+type IntradayMark interface {
+	IntradayBarAtOrBefore(ctx context.Context, symbol, interval string, asOf time.Time) (models.Quote, error)
 }
 
 // HoldingDetail is one equity line with simulated marks (Step 9 GET portfolio).
@@ -33,6 +39,7 @@ type PortfolioDetail struct {
 	SimulationID    uuid.UUID       `json:"simulation_id"`
 	AgentID         uuid.UUID       `json:"agent_id"`
 	AsOfDate        string          `json:"as_of_date"`
+	AsOfTs          string          `json:"as_of_ts,omitempty"`
 	Cash            float64         `json:"cash"`
 	Holdings        []HoldingDetail `json:"holdings"`
 	InvestedValue   float64         `json:"invested_value"`
@@ -52,6 +59,10 @@ func (m *Manager) GetPortfolioDetail(ctx context.Context, simulationID, agentID 
 	}
 
 	asOfDay := asOf.UTC().Truncate(24 * time.Hour)
+	hourlyMark := !asOf.Equal(asOfDay)
+	if hourlyMark {
+		asOfDay = market.SessionCalendarUTC(asOf)
+	}
 
 	var pid int64
 	err := m.pool.QueryRow(ctx, `
@@ -85,6 +96,9 @@ func (m *Manager) GetPortfolioDetail(ctx context.Context, simulationID, agentID 
 		Holdings:        nil,
 		StartingCapital: StartingCapitalINR,
 	}
+	if hourlyMark {
+		out.AsOfTs = asOf.UTC().Format(time.RFC3339)
+	}
 
 	invested := 0.0
 	for rows.Next() {
@@ -95,6 +109,11 @@ func (m *Manager) GetPortfolioDetail(ctx context.Context, simulationID, agentID 
 			return nil, err
 		}
 		q, err := bars.BarOnDate(ctx, sym, asOfDay)
+		if hourlyMark {
+			if im, ok := bars.(IntradayMark); ok {
+				q, err = im.IntradayBarAtOrBefore(ctx, sym, market.Interval60m, asOf)
+			}
+		}
 		var mark float64
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

@@ -59,13 +59,20 @@ type Trade struct {
 	Date         time.Time `json:"date"`
 }
 
+const (
+	Interval1d  = "1d"
+	Interval60m = "60m"
+)
+
 // Quote is the simulated price context for an agent at the current clock date.
 type Quote struct {
-	Symbol string    `json:"symbol"`
-	Date   time.Time `json:"date"`
-	Open   float64   `json:"open"`
-	High   float64   `json:"high"`
-	Low    float64   `json:"low"`
-	Close  float64   `json:"close"`
-	Volume int64     `json:"volume"`
+	Symbol   string    `json:"symbol"`
+	Date     time.Time `json:"date"`
+	Ts       time.Time `json:"ts,omitempty"`
+	Interval string    `json:"interval,omitempty"`
+	Open     float64   `json:"open"`
+	High     float64   `json:"high"`
+	Low      float64   `json:"low"`
+	Close    float64   `json:"close"`
+	Volume   int64     `json:"volume"`
 }
