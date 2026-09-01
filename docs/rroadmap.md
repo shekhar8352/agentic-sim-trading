@@ -801,12 +801,14 @@ Agent types to add:
 
 ```
 Make simulation more realistic:
-├── Circuit breakers     Stock halts if price moves >10% in a day
+├── Circuit breakers     Stock halts if price moves >10% vs prior close (hourly: rest of session)
 ├── Liquidity limits     Can't buy more than 1% of daily volume
-├── Corporate actions    Handle stock splits, dividends
-├── Transaction costs    STT, exchange fees, GST on brokerage
+├── Hourly bars          Opt-in 60m path fills, VWAP, partials, spreads (Yahoo ~2y lookback)
+├── Transaction costs    STT (delivery vs intraday), exchange fees, GST on brokerage
 └── Market impact        Large orders move price slightly
 ```
+
+Corporate actions remain deferred (yfinance `auto_adjust=True` at ingest).
 
 ### Step 21: Performance Metrics to Track Per Agent
 
@@ -854,7 +856,7 @@ Day 5   Build simulation clock + first tick test
 
 - [ ] Stock universe: Nifty 50 only, or Nifty 500?
 - [ ] Simulation speed: 1 tick/second (demo mode) or instant batch replay?
-- [ ] Intraday support: EOD only for now, or 5-min candles later?
+- [x] Intraday support: EOD default; optional 60m bars (`bar_interval`)
 - [ ] Agent constraints: Should agents know what other agents are doing?
 - [ ] Hosting: Local dev only, or deploy to cloud (Fly.io / Railway)?
 - [ ] LLM cost management: Set a per-agent token budget per simulation?

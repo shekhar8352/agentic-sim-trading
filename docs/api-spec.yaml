@@ -48,7 +48,7 @@ paths:
                 name: { type: string }
                 start_date: { type: string, format: date }
                 end_date: { type: string, format: date }
-                config: { type: object }
+                config: { type: object, additionalProperties: true, description: "Includes bar_interval (1d|60m), as_of_ts, participation_rate, missed_ticks_limit." }
       responses:
         "201":
           description: Created
@@ -296,9 +296,15 @@ paths:
         - in: query
           name: days
           schema: { type: integer, default: 20 }
+        - in: query
+          name: interval
+          schema: { type: string, enum: [1d, 60m] }
+        - in: query
+          name: bars
+          schema: { type: integer, default: 20 }
       responses:
         "200":
-          description: Historical bars up to as_of_date
+          description: Historical bars up to as_of_date / as_of_ts
 
   /api/v1/orders/{agentId}:
     get:

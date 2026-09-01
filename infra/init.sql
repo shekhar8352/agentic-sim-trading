@@ -21,6 +21,19 @@ CREATE TABLE ohlcv (
 );
 CREATE INDEX idx_ohlcv_symbol_date ON ohlcv(symbol, date);
 
+CREATE TABLE ohlcv_bars (
+    symbol          VARCHAR(20) NOT NULL REFERENCES stocks(symbol),
+    ts              TIMESTAMPTZ NOT NULL,
+    interval        VARCHAR(8)  NOT NULL,
+    open            NUMERIC(12,4),
+    high            NUMERIC(12,4),
+    low             NUMERIC(12,4),
+    close           NUMERIC(12,4),
+    volume          BIGINT,
+    UNIQUE (symbol, ts, interval)
+);
+CREATE INDEX idx_ohlcv_bars_symbol_ts ON ohlcv_bars(symbol, interval, ts);
+
 CREATE TABLE agents (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            VARCHAR(100),
@@ -72,8 +85,12 @@ CREATE TABLE orders (
     status          VARCHAR(10),
     filled_price    NUMERIC(12,4),
     filled_at       DATE,
+    filled_at_ts    TIMESTAMPTZ,
+    filled_quantity INT,
+    remaining_quantity INT,
     rejection_reason TEXT,
     match_on_date   DATE,
+    match_on_ts     TIMESTAMPTZ,
     fees_total      NUMERIC(15,4),
     trade_value     NUMERIC(15,4),
     fee_brokerage   NUMERIC(15,4),
@@ -85,6 +102,8 @@ CREATE TABLE orders (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_orders_sim_match_pending ON orders(simulation_id, match_on_date, status)
+    WHERE status = 'pending';
+CREATE INDEX idx_orders_sim_match_ts_pending ON orders(simulation_id, match_on_ts, status)
     WHERE status = 'pending';
 
 CREATE TABLE portfolio_snapshots (

@@ -84,8 +84,8 @@ TECHM.NS       TITAN.NS       ULTRACEMCO.NS  UPL.NS         WIPRO.NS
 |---|---|
 | **Data source** | Yahoo Finance (`yfinance` Python library) |
 | **Data range** | 1 January 2022 – 31 December 2024 (3 years) |
-| **Granularity** | End-of-Day (EOD) — one OHLCV bar per trading day |
-| **Fields stored** | `open`, `high`, `low`, `close`, `volume` |
+| **Granularity** | End-of-Day (EOD, default) — one OHLCV bar per trading day. Optional **hourly mode** (`config.bar_interval = 60m`) uses Yahoo 60-minute bars (~730 calendar days of lookback). |
+| **Fields stored** | Daily: `open`, `high`, `low`, `close`, `volume`. Hourly: same fields plus bar timestamp `ts`. |
 | **Adjusted prices** | Yes — use split/dividend-adjusted prices throughout |
 | **Live / real-time data** | Not used — simulation is entirely historical replay |
 | **Data currency** | INR (all prices as returned by Yahoo Finance for `.NS` tickers) |
@@ -100,7 +100,7 @@ A trading day is any calendar date for which NSE OHLCV data exists in the databa
 
 | Parameter | Value |
 |---|---|
-| **Time unit (tick)** | 1 tick = 1 trading day |
+| **Time unit (tick)** | Default: 1 tick = 1 trading day. Hourly mode: 1 tick = one 60-minute NSE bar. |
 | **Clock type** | Virtual — not tied to wall clock time |
 | **Simulation start date** | 3 January 2022 (first trading day in dataset) |
 | **Simulation end date** | 31 December 2024 (last trading day in dataset) |
@@ -140,7 +140,7 @@ On each tick, the Go service executes the following steps in order:
 
 ### Information Barrier (No Future Peeking)
 
-The Go service must **never return OHLCV data, prices, or any market information for dates beyond `simulation.as_of_date`**. This is enforced at the API query layer on every request. Violating this rule gives agents future information and invalidates the simulation entirely.
+The Go service must **never return OHLCV data, prices, or any market information beyond the clock**. Daily mode clamps to `as_of_date`. Hourly mode clamps to `as_of_ts` (completed bars only). Mid-session hourly ticks must not expose the rest of that day's daily bar.
 
 ---
 
@@ -148,15 +148,15 @@ The Go service must **never return OHLCV data, prices, or any market information
 
 ### 5.1 Supported Order Types
 
-| Order Type | Phase 1 | Fill Behaviour |
-|---|---|---|
-| **Market Buy** | ✅ Supported | Fills at `open` price of current tick date |
-| **Market Sell** | ✅ Supported | Fills at `open` price of current tick date |
-| **Limit Buy** | ❌ Not supported | Planned for a future phase |
-| **Limit Sell** | ❌ Not supported | Planned for a future phase |
-| **Stop-Loss** | ❌ Not supported | Planned for a future phase |
+| Order Type | Support | Daily fill | Hourly fill |
+|---|---|---|---|
+| **Market Buy/Sell** | ✅ | Fill at day's `open` | Fill at bar VWAP proxy `(H+L+C)/3` plus half-spread; may **partial-fill** vs 10% of bar volume |
+| **Limit Buy/Sell** | ✅ | Fill at limit if day's range touches | Fill at `min(limit, open)` (buy) / `max(limit, open)` (sell) if open already through; else at limit when touched. Remainder defers. |
+| **Stop / stop-loss** | ✅ | Trigger on day's high/low; fill at day's `open` | Trigger on bar range; fill at `max(stop, open)` (sell) / `min(stop, open)` (buy) |
 
 Agents submitting unsupported order types receive status `rejected` with reason `order_type_not_supported`.
+
+Hourly leftover quantity expires at session close (`day_order_expired`) unless already partially filled (then the executed quantity is kept).
 
 ### 5.2 Order Limits Per Tick
 
@@ -201,7 +201,7 @@ current_in_stock        = holdings[symbol].quantity × prev_close[symbol]
 allowed_additional_cost = max_allowed_in_stock - current_in_stock
 ```
 
-If a buy order's total cost (including brokerage) would push a single stock's allocation above 20%, the **entire order is rejected** with reason `concentration_limit_exceeded`. Partial fills are not supported in Phase 1.
+If a buy order's total cost (including brokerage) would push a single stock's allocation above 20%, the **entire order is rejected** with reason `concentration_limit_exceeded`. Daily mode does not partial-fill for concentration. Hourly mode may partial-fill for **volume participation** only.
 
 ### 6.2 Cash Constraint
 
@@ -257,15 +257,19 @@ For each PENDING order on tick date D (processed in received-timestamp order):
   11. Mark order: status=filled, filled_price=open_price, filled_at=D
 ```
 
-### 7.3 Slippage
+### 7.3 Slippage, spread, and market impact
 
-No artificial slippage is applied in Phase 1. All market orders fill at the exact open price. Realistic slippage modelling will be considered in Phase 6.
+Daily market orders fill at the exact open. A small size-based market impact (up to 0.2%) may nudge the fill against the trader when quantity exceeds 0.5% of prior-day volume.
 
-### 7.4 Partial Fills
+Hourly aggressive fills (market and stop) add a half-spread: `max(₹0.05, 0.10 × (high − low))`. Impact still applies to the filled slice.
 
-Not supported in Phase 1. An order is either fully filled or fully rejected. No partial quantities.
+### 7.4 Partial fills
 
-### 7.5 Portfolio Snapshot (EOD)
+Daily mode: all-or-nothing.
+
+Hourly mode: a slice cannot exceed `participation_rate` (default 10%) of that bar's volume. Unfilled remainder stays pending for later bars the same session (DAY).
+
+### 7.5 Portfolio Snapshot (EOD / session close)
 
 After all orders are processed for tick date D, the Go service calculates each agent's end-of-day portfolio value:
 
@@ -284,7 +288,7 @@ All transaction costs are deducted from `cash_balance` at the time of order fill
 | Cost Component | Rate | Applied On |
 |---|---|---|
 | **Brokerage** | 0.1% of trade value | Both buy and sell |
-| **STT (Securities Transaction Tax)** | 0.1% of trade value | Sell orders only |
+| **STT (Securities Transaction Tax)** | 0.1% of trade value (delivery) | Sell orders. Hourly same-session round trips use **intraday STT 0.025%** on the squared quantity. |
 | **Exchange transaction charge** | 0.00345% of trade value | Both buy and sell |
 | **GST on brokerage** | 18% of brokerage amount | Both buy and sell |
 | **SEBI turnover charge** | 0.0001% of trade value | Both buy and sell |
@@ -319,6 +323,8 @@ Total deducted from cash      = ₹35,047.80
 ### 9.1 Circuit Breaker (Stock Level)
 
 If a stock's open price on day D has moved more than ±10% from the previous trading day's close, it is considered to have hit a circuit breaker. All orders for that symbol on tick date D are rejected.
+
+Hourly mode: the ±10% band is still vs the **previous daily close**. If any hourly bar's high/low prints through the band, remaining orders in that symbol are rejected for the rest of the **session**.
 
 ```
 price_change_pct = (D.open - prev_close) / prev_close × 100
@@ -450,6 +456,7 @@ A disqualified agent's portfolio is frozen at the value recorded at the time of 
 | Version | Date | Author | Changes |
 |---|---|---|---|
 | `v1.0` | May 2026 | — | Initial rules document |
+| `v1.1` | Sep 2026 | — | Dual mode: daily EOD default plus opt-in 60m bars; limit/stop fills; hourly VWAP/partials/spread; session circuit; intraday STT |
 
 > **Critical:** Any change to Sections 5–10 (order rules, portfolio constraints, execution, costs, market restrictions, ranking) requires a version number increment and must be deployed to both the Go service and Python service before the next simulation run. Rules must **never** change during an active simulation.
 
