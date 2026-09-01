@@ -11,7 +11,8 @@ import (
 type QuoteProvider struct {
 	data *Data
 	// AsOf is set when simulation clock advances; zero means "latest in DB".
-	AsOf time.Time
+	AsOf     time.Time
+	Interval string
 }
 
 func NewQuoteProvider(data *Data) *QuoteProvider {
@@ -20,6 +21,12 @@ func NewQuoteProvider(data *Data) *QuoteProvider {
 
 // Current returns the bar used as the reference quote (latest bar ≤ AsOf, or latest overall).
 func (p *QuoteProvider) Current(ctx context.Context, symbol string) (models.Quote, error) {
+	if NormalizeInterval(p.Interval) == Interval60m {
+		if p.AsOf.IsZero() {
+			return p.data.IntradayBarAtOrBefore(ctx, symbol, Interval60m, time.Now().UTC())
+		}
+		return p.data.IntradayBarAtOrBefore(ctx, symbol, Interval60m, p.AsOf)
+	}
 	if p.AsOf.IsZero() {
 		return p.data.LatestBar(ctx, symbol)
 	}

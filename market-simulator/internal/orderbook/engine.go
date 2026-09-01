@@ -302,9 +302,9 @@ func (e *Engine) tryFillOrder(
 
 	switch strings.ToLower(strings.TrimSpace(o.Side)) {
 	case "buy":
-		return e.fillBuy(ctx, tx, simulationID, tradeDate, o, fillPx, prevCloseCache, redisPayloads)
+		return e.fillBuy(ctx, tx, simulationID, tradeDate, o, fillPx, o.Quantity, 0, tradeDate.UTC(), nil, prevCloseCache, redisPayloads)
 	case "sell":
-		return e.fillSell(ctx, tx, simulationID, tradeDate, o, fillPx, redisPayloads)
+		return e.fillSell(ctx, tx, simulationID, tradeDate, o, fillPx, o.Quantity, 0, tradeDate.UTC(), nil, fees.SellFees(float64(o.Quantity)*fillPx), redisPayloads)
 	default:
 		return "invalid_side"
 	}
@@ -317,9 +317,16 @@ func (e *Engine) fillBuy(
 	tradeDate time.Time,
 	o orders.Row,
 	fillPx float64,
+	fillQty int,
+	remainingAfter int,
+	fillTs time.Time,
+	nextMatch *time.Time,
 	prevCloseCache map[string]float64,
 	redisPayloads *[]map[string]any,
 ) string {
+	if fillQty <= 0 {
+		fillQty = o.WorkingQty()
+	}
 	pid, err := e.PM.PortfolioIDTx(ctx, tx, simulationID, o.AgentID)
 	if err != nil {
 		return "portfolio_not_found"
@@ -343,7 +350,7 @@ func (e *Engine) fillBuy(
 		return "portfolio_error"
 	}
 
-	tradeVal := float64(o.Quantity) * fillPx
+	tradeVal := float64(fillQty) * fillPx
 	br := fees.BuyFees(tradeVal)
 	totalDebit := br.TotalDebit(tradeVal)
 	if cash < totalDebit {
@@ -351,7 +358,7 @@ func (e *Engine) fillBuy(
 	}
 
 	h := holdings[o.Symbol]
-	newStockExposure := float64(h.Quantity+o.Quantity) * prevSym
+	newStockExposure := float64(h.Quantity+fillQty) * prevSym
 	if ConcentrationExceeded(newStockExposure, pv) {
 		return "concentration_limit_exceeded"
 	}
@@ -360,10 +367,14 @@ func (e *Engine) fillBuy(
 	if err := e.PM.SetCashTx(ctx, tx, pid, newCash); err != nil {
 		return "portfolio_error"
 	}
-	if err := e.PM.UpsertHoldingAfterBuy(ctx, tx, pid, o.Symbol, o.Quantity, fillPx); err != nil {
+	if err := e.PM.UpsertHoldingAfterBuy(ctx, tx, pid, o.Symbol, fillQty, fillPx); err != nil {
 		return "portfolio_error"
 	}
-	if err := orders.MarkFilled(ctx, tx, o.ID, fillPx, tradeDate.UTC(), br, tradeVal); err != nil {
+	if remainingAfter > 0 || nextMatch != nil || o.FilledQuantity > 0 {
+		if err := orders.ApplySliceFill(ctx, tx, o.ID, fillQty, remainingAfter, fillPx, tradeDate.UTC(), fillTs, nextMatch, br, tradeVal); err != nil {
+			return "persist_error"
+		}
+	} else if err := orders.MarkFilled(ctx, tx, o.ID, fillPx, tradeDate.UTC(), br, tradeVal); err != nil {
 		return "persist_error"
 	}
 	*redisPayloads = append(*redisPayloads, map[string]any{
@@ -373,12 +384,13 @@ func (e *Engine) fillBuy(
 		"agent_id":      o.AgentID.String(),
 		"symbol":        o.Symbol,
 		"side":          "buy",
-		"quantity":      o.Quantity,
+		"quantity":      fillQty,
 		"filled_price":  fillPx,
 		"fees_total":    br.Total,
 		"fees":          br,
 		"trade_value":   tradeVal,
 		"match_on_date": tradeDate.UTC().Format(time.DateOnly),
+		"remaining":     remainingAfter,
 	})
 	return ""
 }
@@ -390,8 +402,16 @@ func (e *Engine) fillSell(
 	tradeDate time.Time,
 	o orders.Row,
 	fillPx float64,
+	fillQty int,
+	remainingAfter int,
+	fillTs time.Time,
+	nextMatch *time.Time,
+	br fees.Breakdown,
 	redisPayloads *[]map[string]any,
 ) string {
+	if fillQty <= 0 {
+		fillQty = o.WorkingQty()
+	}
 	pid, err := e.PM.PortfolioIDTx(ctx, tx, simulationID, o.AgentID)
 	if err != nil {
 		return "portfolio_not_found"
@@ -400,12 +420,11 @@ func (e *Engine) fillSell(
 	if err != nil {
 		return "portfolio_error"
 	}
-	if qtyHeld < o.Quantity {
+	if qtyHeld < fillQty {
 		return "insufficient_holdings"
 	}
 
-	tradeVal := float64(o.Quantity) * fillPx
-	br := fees.SellFees(tradeVal)
+	tradeVal := float64(fillQty) * fillPx
 	credit := br.TotalCredit(tradeVal)
 
 	cash, err := e.PM.GetCashTx(ctx, tx, pid)
@@ -415,10 +434,14 @@ func (e *Engine) fillSell(
 	if err := e.PM.SetCashTx(ctx, tx, pid, cash+credit); err != nil {
 		return "portfolio_error"
 	}
-	if err := e.PM.ReduceHoldingAfterSell(ctx, tx, pid, o.Symbol, o.Quantity); err != nil {
+	if err := e.PM.ReduceHoldingAfterSell(ctx, tx, pid, o.Symbol, fillQty); err != nil {
 		return "portfolio_error"
 	}
-	if err := orders.MarkFilled(ctx, tx, o.ID, fillPx, tradeDate.UTC(), br, tradeVal); err != nil {
+	if remainingAfter > 0 || nextMatch != nil || o.FilledQuantity > 0 {
+		if err := orders.ApplySliceFill(ctx, tx, o.ID, fillQty, remainingAfter, fillPx, tradeDate.UTC(), fillTs, nextMatch, br, tradeVal); err != nil {
+			return "persist_error"
+		}
+	} else if err := orders.MarkFilled(ctx, tx, o.ID, fillPx, tradeDate.UTC(), br, tradeVal); err != nil {
 		return "persist_error"
 	}
 	*redisPayloads = append(*redisPayloads, map[string]any{
@@ -428,13 +451,14 @@ func (e *Engine) fillSell(
 		"agent_id":      o.AgentID.String(),
 		"symbol":        o.Symbol,
 		"side":          "sell",
-		"quantity":      o.Quantity,
+		"quantity":      fillQty,
 		"filled_price":  fillPx,
 		"fees_total":    br.Total,
 		"fees":          br,
 		"trade_value":   tradeVal,
 		"net_credit":    credit,
 		"match_on_date": tradeDate.UTC().Format(time.DateOnly),
+		"remaining":     remainingAfter,
 	})
 	return ""
 }
