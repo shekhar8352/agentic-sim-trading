@@ -115,7 +115,7 @@ func (r *Registry) maybeCheckpoint(ctx context.Context, simulationID uuid.UUID, 
 	if err := simulation.SetAwaitingProceed(ctx, r.pool, simulationID, true); err != nil {
 		return err
 	}
-	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.CurrentDate, "paused"); err != nil {
+	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.SessionCalendar(), "paused"); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -125,7 +125,7 @@ func (r *Registry) maybeCheckpoint(ctx context.Context, simulationID uuid.UUID, 
 	r.mu.Unlock()
 	return r.publish(ctx, "sim.checkpoint", map[string]any{
 		"simulation_id":            simulationID.String(),
-		"date":                     c.CurrentDate.Format(time.DateOnly),
+		"date":                     c.SessionCalendar().Format(time.DateOnly),
 		"days_since_checkpoint":    newDays,
 		"checkpoint_interval_days": interval,
 		"trading_day_index":        c.CurrentIndex,

@@ -148,7 +148,22 @@ func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 
 	asOf := c.CurrentDate.UTC().Truncate(24 * time.Hour)
 	var matchOn time.Time
-	if h.Clocks.OrderFillsOnCurrentDate(req.SimulationID) {
+	var matchTs *time.Time
+	if c.Hourly() {
+		if h.Clocks.OrderFillsOnCurrentDate(req.SimulationID) {
+			t := c.CurrentDate
+			matchTs = &t
+		} else {
+			next, err := h.Market.NextBar(r.Context(), market.Interval60m, c.CurrentDate)
+			if err != nil || next.IsZero() {
+				h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
+				writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "no next bar after current simulation time"})
+				return
+			}
+			matchTs = &next
+		}
+		matchOn = market.SessionCalendarUTC(*matchTs)
+	} else if h.Clocks.OrderFillsOnCurrentDate(req.SimulationID) {
 		matchOn = asOf
 	} else {
 		next, err := h.Market.NextTradingDay(r.Context(), asOf)
@@ -160,18 +175,22 @@ func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		matchOn = next
 	}
 
-	id, err := orders.InsertPending(r.Context(), h.DB, req.SimulationID, req.AgentID, req.Symbol, req.OrderType, req.Side, req.Quantity, req.Price, matchOn)
+	id, err := orders.InsertPending(r.Context(), h.DB, req.SimulationID, req.AgentID, req.Symbol, req.OrderType, req.Side, req.Quantity, req.Price, matchOn, matchTs)
 	if err != nil {
 		h.Clocks.RollbackOrderSubmission(req.SimulationID, req.AgentID)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "failed to persist order"})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
+	resp := map[string]any{
 		"id":            id.String(),
 		"match_on_date": matchOn.UTC().Format(time.DateOnly),
 		"status":        orders.StatusPending,
-	})
+	}
+	if matchTs != nil {
+		resp["match_on_ts"] = matchTs.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (h *Handler) GetPortfolio(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +268,11 @@ func (h *Handler) resolveSimulationAsOf(ctx context.Context, simID uuid.UUID) (t
 func (h *Handler) resolvePortfolioMarkDate(ctx context.Context, simID uuid.UUID) (time.Time, error) {
 	t, err := h.resolveSimulationAsOf(ctx, simID)
 	if err == nil {
+		if h.Clocks != nil {
+			if c, ok := h.Clocks.ActiveClock(simID); ok && c.Hourly() {
+				return t, nil
+			}
+		}
 		return t.UTC().Truncate(24 * time.Hour), nil
 	}
 	if !errors.Is(err, errSimulationNoAsOf) {
@@ -291,6 +315,9 @@ func (h *Handler) GetQuote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		qp.AsOf = asOf
+		if row, err := simulation.Get(r.Context(), h.DB, simID); err == nil {
+			qp.Interval = simulation.BarInterval(row.Config)
+		}
 	}
 	q, err := qp.Current(r.Context(), symbol)
 	if err != nil {
@@ -320,11 +347,19 @@ func (h *Handler) GetOHLCV(w http.ResponseWriter, r *http.Request) {
 			days = v
 		}
 	}
+	if b := r.URL.Query().Get("bars"); b != "" {
+		if v, err := strconv.Atoi(b); err == nil && v > 0 && v <= 500 {
+			days = v
+		}
+	}
+	interval := market.NormalizeInterval(r.URL.Query().Get("interval"))
 	data := h.Market
 	if data == nil {
 		data = market.NewData(h.DB)
 	}
 	asOf := time.Now().UTC()
+	hourlySim := false
+	lastBar := true
 	if sid := r.URL.Query().Get("simulation_id"); sid != "" {
 		simID, err := uuid.Parse(sid)
 		if err != nil {
@@ -344,8 +379,37 @@ func (h *Handler) GetOHLCV(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		if h.Clocks != nil {
+			if c, ok := h.Clocks.ActiveClock(simID); ok && c.Hourly() {
+				hourlySim = true
+				lastBar = c.IsLastBarOfSession()
+				if interval == market.Interval1d && r.URL.Query().Get("interval") == "" {
+					interval = market.Interval1d
+				}
+			}
+		}
+		if row, err := simulation.Get(r.Context(), h.DB, simID); err == nil && r.URL.Query().Get("interval") == "" && simulation.Hourly(row.Config) {
+			hourlySim = true
+		}
 	}
-	bars, err := data.BarsForSymbol(r.Context(), symbol, asOf, days)
+	if interval == market.Interval60m {
+		bars, err := data.IntradayBarsForSymbol(r.Context(), symbol, market.Interval60m, asOf, days)
+		if err != nil {
+			if err == market.ErrNoDatabase {
+				notImplemented(w, "DATABASE_URL not set — cannot load OHLCV")
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "query failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, bars)
+		return
+	}
+	dailyAsOf := asOf
+	if hourlySim && !lastBar {
+		dailyAsOf = market.SessionCalendarUTC(asOf).AddDate(0, 0, -1)
+	}
+	bars, err := data.BarsForSymbol(r.Context(), symbol, dailyAsOf, days)
 	if err != nil {
 		if err == market.ErrNoDatabase {
 			notImplemented(w, "DATABASE_URL not set — cannot load OHLCV")
@@ -602,19 +666,29 @@ func (h *Handler) GetSimulation(w http.ResponseWriter, r *http.Request) {
 		"auto_tick_enabled":        simulation.AutoTickEnabled(row.Config),
 		"tick_interval_seconds":    simulation.TickIntervalSeconds(row.Config),
 		"order_window_seconds":     simulation.OrderWindowSeconds(row.Config),
+		"bar_interval":             simulation.BarInterval(row.Config),
 		"has_as_of":                row.AsOfDate != nil,
 		"clock_loaded":             false,
 	}
 	if row.AsOfDate != nil {
 		out["as_of_date"] = row.AsOfDate.Format(time.DateOnly)
 	}
+	if ts := simulation.AsOfTS(row.Config); ts != "" {
+		out["as_of_ts"] = ts
+	}
 	if h.Clocks != nil {
 		if c, ok := h.Clocks.ActiveClock(simID); ok {
 			out["clock_loaded"] = true
 			out["clock_status"] = c.Status
-			out["current_trading_day"] = c.CurrentDate.Format(time.DateOnly)
+			out["current_trading_day"] = c.SessionCalendar().Format(time.DateOnly)
 			out["trading_day_index"] = c.CurrentIndex
 			out["total_trading_days"] = len(c.TradingDays)
+			out["interval"] = market.NormalizeInterval(c.Interval)
+			if c.Hourly() {
+				out["bar_ts"] = c.CurrentDate.UTC().Format(time.RFC3339)
+				out["session_bar"] = c.SessionBarIndex()
+				out["session_bars"] = c.SessionBarCount()
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

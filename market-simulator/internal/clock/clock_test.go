@@ -46,3 +46,24 @@ func TestSimClockTickProgression(t *testing.T) {
 		t.Fatalf("paused tick: got %v", err)
 	}
 }
+
+func TestHourlySessionBarIndex(t *testing.T) {
+	t.Parallel()
+	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	a := time.Date(2025, 3, 12, 3, 45, 0, 0, time.UTC)
+	b := time.Date(2025, 3, 12, 4, 45, 0, 0, time.UTC)
+	c := time.Date(2025, 3, 13, 3, 45, 0, 0, time.UTC)
+	clock := NewSimClockAt(id, []time.Time{a, b, c}, 1, "running", nil)
+	clock.Interval = "60m"
+	if clock.SessionBarIndex() != 2 || clock.SessionBarCount() != 2 {
+		t.Fatalf("session bars: %d/%d", clock.SessionBarIndex(), clock.SessionBarCount())
+	}
+	if clock.IsLastBarOfSession() != true {
+		t.Fatal("index 1 should be last of 12 Mar session")
+	}
+	clock.CurrentIndex = 0
+	clock.CurrentDate = a
+	if clock.IsLastBarOfSession() {
+		t.Fatal("first bar should not be last")
+	}
+}
