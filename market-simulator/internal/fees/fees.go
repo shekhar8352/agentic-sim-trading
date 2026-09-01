@@ -2,6 +2,13 @@ package fees
 
 // Rules docs/rules.md §8 — components applied to trade value V.
 
+const (
+	// DeliverySTTRate is NSE delivery STT on sell value (0.1%).
+	DeliverySTTRate = 0.001
+	// IntradaySTTRate is NSE intraday STT on sell value (0.025%).
+	IntradaySTTRate = 0.00025
+)
+
 // Breakdown is the per-component fee audit stored on the order row.
 type Breakdown struct {
 	Brokerage float64 `json:"brokerage"`
@@ -38,13 +45,11 @@ func BuyFees(tradeValue float64) Breakdown {
 	}
 }
 
-// SellFees returns sell-side components (STT applies; no stamp).
-func SellFees(tradeValue float64) Breakdown {
+func sellBase(tradeValue, stt float64) Breakdown {
 	brokerage := 0.001 * tradeValue
 	gst := 0.18 * brokerage
 	exchange := 0.0000345 * tradeValue
 	sebi := 0.000001 * tradeValue
-	stt := 0.001 * tradeValue
 	return Breakdown{
 		Brokerage: brokerage,
 		GST:       gst,
@@ -53,6 +58,18 @@ func SellFees(tradeValue float64) Breakdown {
 		STT:       stt,
 		Total:     brokerage + gst + exchange + sebi + stt,
 	}
+}
+
+// SellFees returns sell-side components with delivery STT (no stamp).
+func SellFees(tradeValue float64) Breakdown {
+	return sellBase(tradeValue, DeliverySTTRate*tradeValue)
+}
+
+// SellFeesMixed applies delivery STT on overnight lots and intraday STT on same-session round trips.
+func SellFeesMixed(deliveryValue, intradayValue float64) Breakdown {
+	total := deliveryValue + intradayValue
+	stt := DeliverySTTRate*deliveryValue + IntradaySTTRate*intradayValue
+	return sellBase(total, stt)
 }
 
 // BuyDebit returns cash leaving the account (V + all buy-side fees).

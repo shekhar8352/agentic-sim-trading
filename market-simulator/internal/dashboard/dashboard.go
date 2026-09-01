@@ -93,6 +93,7 @@ type OrderRow struct {
 	Status       string   `json:"status"`
 	FilledPrice  *float64 `json:"filled_price,omitempty"`
 	MatchOnDate  *string  `json:"match_on_date,omitempty"`
+	FilledAtTs   *string  `json:"filled_at_ts,omitempty"`
 	RejectReason *string  `json:"rejection_reason,omitempty"`
 	CreatedAt    string   `json:"created_at"`
 }
@@ -107,7 +108,7 @@ func RecentOrders(ctx context.Context, pool *pgxpool.Pool, simulationID uuid.UUI
 	}
 	rows, err := pool.Query(ctx, `
 		SELECT o.id, o.agent_id, COALESCE(a.name, ''), o.symbol, o.side, o.quantity, o.status,
-		       o.filled_price, o.match_on_date, o.rejection_reason, o.created_at
+		       o.filled_price, o.match_on_date, o.filled_at_ts, o.rejection_reason, o.created_at
 		FROM orders o
 		LEFT JOIN agents a ON a.id = o.agent_id
 		WHERE o.simulation_id = $1
@@ -126,10 +127,11 @@ func RecentOrders(ctx context.Context, pool *pgxpool.Pool, simulationID uuid.UUI
 		var oid uuid.UUID
 		var filled *float64
 		var matchOn *time.Time
+		var filledTs *time.Time
 		var reject *string
 		var created time.Time
 		if err := rows.Scan(&oid, &aid, &r.AgentName, &r.Symbol, &r.Side, &r.Quantity, &r.Status,
-			&filled, &matchOn, &reject, &created); err != nil {
+			&filled, &matchOn, &filledTs, &reject, &created); err != nil {
 			return nil, err
 		}
 		r.ID = oid.String()
@@ -138,6 +140,10 @@ func RecentOrders(ctx context.Context, pool *pgxpool.Pool, simulationID uuid.UUI
 		if matchOn != nil {
 			v := matchOn.Format(time.DateOnly)
 			r.MatchOnDate = &v
+		}
+		if filledTs != nil {
+			v := filledTs.UTC().Format(time.RFC3339)
+			r.FilledAtTs = &v
 		}
 		r.RejectReason = reject
 		r.CreatedAt = created.UTC().Format(time.RFC3339)

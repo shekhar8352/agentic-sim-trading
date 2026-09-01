@@ -39,6 +39,18 @@ func TestSellFeesIncludeSTT(t *testing.T) {
 	}
 }
 
+func TestSellFeesMixedIntradaySTT(t *testing.T) {
+	t.Parallel()
+	mixed := SellFeesMixed(0, 10_000)
+	if abs(mixed.STT-2.5) > 1e-9 {
+		t.Fatalf("intraday stt: got %v", mixed.STT)
+	}
+	delivery := SellFeesMixed(10_000, 0)
+	if abs(delivery.STT-10) > 1e-9 {
+		t.Fatalf("delivery stt: got %v", delivery.STT)
+	}
+}
+
 func abs(x float64) float64 {
 	if x < 0 {
 		return -x

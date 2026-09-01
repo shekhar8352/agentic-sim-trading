@@ -22,6 +22,11 @@ type DayMatcher interface {
 	ProcessSimulationDay(ctx context.Context, simulationID uuid.UUID, tradeDate time.Time) error
 }
 
+// BarMatcher runs matching against a single intraday bar.
+type BarMatcher interface {
+	ProcessSimulationBar(ctx context.Context, simulationID uuid.UUID, barTs time.Time) error
+}
+
 type submissionWindow struct {
 	Open    bool
 	Date    time.Time
@@ -74,6 +79,14 @@ func ShouldAdvance(lastMatched, current time.Time) bool {
 	cur := current.UTC().Truncate(24 * time.Hour)
 	last := lastMatched.UTC().Truncate(24 * time.Hour)
 	return !last.Before(cur)
+}
+
+// ShouldAdvanceExact is true when lastMatched is at or after current (bar-level).
+func ShouldAdvanceExact(lastMatched, current time.Time) bool {
+	if lastMatched.IsZero() {
+		return false
+	}
+	return !lastMatched.Before(current)
 }
 
 // WindowOpen is true while agents may submit orders for the current tick date.
@@ -184,6 +197,10 @@ func (r *Registry) Start(ctx context.Context, simulationID uuid.UUID) error {
 	}
 
 	days, err := r.market.DistinctTradingDays(ctx, row.StartDate, row.EndDate)
+	interval := simulation.BarInterval(row.Config)
+	if interval == simulation.Interval60m {
+		days, err = r.market.DistinctBars(ctx, interval, row.StartDate, row.EndDate)
+	}
 	if err != nil {
 		return err
 	}
@@ -192,12 +209,26 @@ func (r *Registry) Start(ctx context.Context, simulationID uuid.UUID) error {
 	}
 
 	idx := 0
-	if row.AsOfDate != nil {
+	if interval == simulation.Interval60m {
+		if s := simulation.AsOfTS(row.Config); s != "" {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				idx = indexOfBar(days, t.UTC())
+			}
+		} else if row.AsOfDate != nil {
+			idx = indexOfBarOnSession(days, *row.AsOfDate)
+		}
+	} else if row.AsOfDate != nil {
 		idx = indexOfTradingDay(days, *row.AsOfDate)
 	}
 
 	lastMatched := time.Time{}
-	if s := simulation.LastMatchedDate(row.Config); s != "" {
+	if interval == simulation.Interval60m {
+		if s := simulation.LastMatchedTS(row.Config); s != "" {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				lastMatched = t.UTC()
+			}
+		}
+	} else if s := simulation.LastMatchedDate(row.Config); s != "" {
 		if t, err := time.Parse(time.DateOnly, s); err == nil {
 			lastMatched = t.UTC().Truncate(24 * time.Hour)
 		}
@@ -207,16 +238,13 @@ func (r *Registry) Start(ctx context.Context, simulationID uuid.UUID) error {
 	if existing, ok := r.clocks[simulationID]; ok {
 		if existing.Status == "paused" {
 			existing.Status = "running"
+			existing.Interval = interval
 			r.mu.Unlock()
-			if err := simulation.UpdateClock(ctx, r.pool, simulationID, existing.CurrentDate, "running"); err != nil {
+			if err := simulation.UpdateClock(ctx, r.pool, simulationID, existing.SessionCalendar(), "running"); err != nil {
 				return err
 			}
-			return r.publish(ctx, "sim.resumed", map[string]any{
-				"simulation_id":      simulationID.String(),
-				"date":               existing.CurrentDate.Format(time.DateOnly),
-				"trading_day_index":  existing.CurrentIndex,
-				"total_trading_days": len(existing.TradingDays),
-			})
+			_ = r.persistAsOfTS(ctx, simulationID, existing)
+			return r.publish(ctx, "sim.resumed", existing.tickPayload())
 		}
 		if existing.Status == "running" {
 			r.mu.Unlock()
@@ -225,27 +253,24 @@ func (r *Registry) Start(ctx context.Context, simulationID uuid.UUID) error {
 	}
 
 	c := NewSimClockAt(simulationID, days, idx, "running", r.redis)
+	c.Interval = interval
 	r.clocks[simulationID] = c
 	r.lastMatched[simulationID] = lastMatched
 	r.mu.Unlock()
 
-	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.CurrentDate, "running"); err != nil {
+	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.SessionCalendar(), "running"); err != nil {
 		r.mu.Lock()
 		delete(r.clocks, simulationID)
 		r.mu.Unlock()
 		return err
 	}
+	_ = r.persistAsOfTS(ctx, simulationID, c)
 
 	ev := "sim.started"
 	if row.AsOfDate != nil && lastMatched.IsZero() == false {
 		ev = "sim.resumed"
 	}
-	if err := r.publish(ctx, ev, map[string]any{
-		"simulation_id":      simulationID.String(),
-		"date":               c.CurrentDate.Format(time.DateOnly),
-		"trading_day_index":  c.CurrentIndex,
-		"total_trading_days": len(c.TradingDays),
-	}); err != nil {
+	if err := r.publish(ctx, ev, c.tickPayload()); err != nil {
 		return err
 	}
 	return nil
@@ -267,7 +292,7 @@ func (r *Registry) Pause(ctx context.Context, simulationID uuid.UUID) error {
 	w := r.windows[simulationID]
 	w.Open = false
 	r.windows[simulationID] = w
-	return simulation.UpdateClock(ctx, r.pool, simulationID, c.CurrentDate, "paused")
+	return simulation.UpdateClock(ctx, r.pool, simulationID, c.SessionCalendar(), "paused")
 }
 
 // Tick advances one trading day (or processes the first unmatched day), opens the submission window, then matches.
@@ -300,6 +325,9 @@ func (r *Registry) Tick(ctx context.Context, simulationID uuid.UUID) error {
 	prevStatus := c.Status
 	last := r.lastMatched[simulationID]
 	advance := ShouldAdvance(last, c.CurrentDate)
+	if c.Hourly() {
+		advance = ShouldAdvanceExact(last, c.CurrentDate)
+	}
 
 	if advance {
 		if err := c.Tick(ctx); err != nil {
@@ -318,10 +346,7 @@ func (r *Registry) Tick(ctx context.Context, simulationID uuid.UUID) error {
 			return nil
 		}
 	} else {
-		_ = r.publish(ctx, "sim.tick", map[string]any{
-			"simulation_id": c.SimulationID.String(),
-			"date":          c.CurrentDate.Format(time.DateOnly),
-		})
+		_ = r.publish(ctx, "sim.tick", c.tickPayload())
 	}
 
 	advanced := c.CurrentIndex != prevIdx
@@ -334,12 +359,13 @@ func (r *Registry) Tick(ctx context.Context, simulationID uuid.UUID) error {
 	}
 	r.mu.Unlock()
 
-	if err := simulation.UpdateClock(ctx, r.pool, simulationID, tradeDate, c.Status); err != nil {
+	if err := simulation.UpdateClock(ctx, r.pool, simulationID, c.SessionCalendar(), c.Status); err != nil {
 		r.mu.Lock()
 		c.Restore(prevIdx, prevDate, prevStatus)
 		r.mu.Unlock()
 		return err
 	}
+	_ = r.persistAsOfTS(ctx, simulationID, c)
 
 	if windowSecs <= 0 {
 		if err := r.CloseWindowAndMatch(ctx, simulationID); err != nil {
@@ -374,26 +400,47 @@ func (r *Registry) CloseWindowAndMatch(ctx context.Context, simulationID uuid.UU
 	r.recordMissedTicks(ctx, simulationID, apiSnap)
 
 	if r.matcher != nil {
-		if err := r.matcher.ProcessSimulationDay(ctx, simulationID, tradeDate); err != nil {
+		hourly := c != nil && c.Hourly()
+		if hourly {
+			if bm, ok := r.matcher.(BarMatcher); ok {
+				if err := bm.ProcessSimulationBar(ctx, simulationID, tradeDate); err != nil {
+					return err
+				}
+			} else if err := r.matcher.ProcessSimulationDay(ctx, simulationID, tradeDate); err != nil {
+				return err
+			}
+		} else if err := r.matcher.ProcessSimulationDay(ctx, simulationID, tradeDate); err != nil {
 			return err
 		}
 	}
 
-	day := tradeDate.UTC().Truncate(24 * time.Hour)
+	matched := tradeDate
+	if c == nil || !c.Hourly() {
+		matched = tradeDate.UTC().Truncate(24 * time.Hour)
+	}
 	r.mu.Lock()
-	r.lastMatched[simulationID] = day
+	r.lastMatched[simulationID] = matched
 	r.resetTickCountersLocked(simulationID)
 	r.mu.Unlock()
 
-	_ = simulation.MergeConfig(ctx, r.pool, simulationID, mustJSON(map[string]any{
-		"last_matched_date": day.Format(time.DateOnly),
-	}))
+	frag := map[string]any{
+		"last_matched_date": matched.UTC().Format(time.DateOnly),
+	}
+	if c != nil && c.Hourly() {
+		frag["last_matched_date"] = market.SessionCalendarUTC(matched).Format(time.DateOnly)
+		frag["last_matched_ts"] = matched.UTC().Format(time.RFC3339)
+	}
+	_ = simulation.MergeConfig(ctx, r.pool, simulationID, mustJSON(frag))
 
 	r.mu.Lock()
 	c = r.clocks[simulationID]
 	r.mu.Unlock()
 	if c != nil && c.Status == "running" {
-		return r.maybeCheckpoint(ctx, simulationID, c, true)
+		countDay := true
+		if c.Hourly() {
+			countDay = c.IsLastBarOfSession()
+		}
+		return r.maybeCheckpoint(ctx, simulationID, c, countDay)
 	}
 	return nil
 }
@@ -432,7 +479,11 @@ func (r *Registry) recordMissedTicks(ctx context.Context, simulationID uuid.UUID
 		if err != nil {
 			continue
 		}
-		if n >= portfolio.MissedTicksDQThreshold {
+		limit := portfolio.MissedTicksDQThreshold
+		if row, err := simulation.Get(ctx, r.pool, simulationID); err == nil {
+			limit = simulation.MissedTicksLimit(row.Config)
+		}
+		if n >= limit {
 			_ = r.pm.SetDisqualified(ctx, simulationID, aid)
 			_ = r.publish(ctx, "agent.disqualified", map[string]any{
 				"simulation_id": simulationID.String(),
@@ -505,6 +556,9 @@ func (r *Registry) OrderFillsOnCurrentDate(simulationID uuid.UUID) bool {
 	if w.Open {
 		return true
 	}
+	if c.Hourly() {
+		return !ShouldAdvanceExact(r.lastMatched[simulationID], c.CurrentDate)
+	}
 	return !ShouldAdvance(r.lastMatched[simulationID], c.CurrentDate)
 }
 
@@ -517,4 +571,47 @@ func indexOfTradingDay(days []time.Time, asOf time.Time) int {
 		}
 	}
 	return 0
+}
+
+func indexOfBar(bars []time.Time, asOf time.Time) int {
+	if asOf.IsZero() || len(bars) == 0 {
+		return 0
+	}
+	best := 0
+	for i, ts := range bars {
+		if !ts.After(asOf) {
+			best = i
+			if ts.Equal(asOf) {
+				return i
+			}
+		}
+	}
+	return best
+}
+
+func indexOfBarOnSession(bars []time.Time, session time.Time) int {
+	cal := market.SessionCalendarUTC(session)
+	best := 0
+	found := false
+	for i, ts := range bars {
+		if market.SessionCalendarUTC(ts).Equal(cal) {
+			if !found {
+				best = i
+				found = true
+			}
+		}
+	}
+	if found {
+		return best
+	}
+	return indexOfBar(bars, session)
+}
+
+func (r *Registry) persistAsOfTS(ctx context.Context, simulationID uuid.UUID, c *SimClock) error {
+	if r.pool == nil || c == nil || !c.Hourly() {
+		return nil
+	}
+	return simulation.MergeConfig(ctx, r.pool, simulationID, mustJSON(map[string]any{
+		"as_of_ts": c.CurrentDate.UTC().Format(time.RFC3339),
+	}))
 }
