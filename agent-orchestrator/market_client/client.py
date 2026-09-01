@@ -129,14 +129,22 @@ class MarketClient:
         symbol: str,
         days: int = 30,
         simulation_id: str | None = None,
+        *,
+        interval: str | None = None,
+        bars: int | None = None,
     ) -> list[dict[str, Any]]:
-        """GET /api/v1/market/ohlcv/{symbol}?days=&simulation_id=..."""
+        """GET /api/v1/market/ohlcv/{symbol}?days=&simulation_id=&interval=&bars="""
         sim = self._resolve_simulation_id(simulation_id)
         symbol = symbol.strip()
+        params: dict[str, Any] = {"days": days, "simulation_id": sim}
+        if interval:
+            params["interval"] = interval
+        if bars is not None:
+            params["bars"] = bars
         data = await self._request(
             "GET",
             f"/api/v1/market/ohlcv/{symbol}",
-            params={"days": days, "simulation_id": sim},
+            params=params,
         )
         if not isinstance(data, list):
             raise APIError(502, "expected OHLCV response to be a JSON array")

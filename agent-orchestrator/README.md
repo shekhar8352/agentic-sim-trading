@@ -68,7 +68,11 @@ Requires Postgres (`infra/docker-compose.data.yml` or full stack). Install inges
 make install-orchestrator-ingest
 export DATABASE_URL='postgresql://admin:secret@localhost:5432/tradingsim'
 python scripts/ingest_data.py
+# Optional hourly bars (~730-day Yahoo lookback) into ohlcv_bars:
+python scripts/ingest_data.py --interval 60m
 ```
+
+Hourly simulations set `config.bar_interval` to `"60m"` on create. LLM agents can skip bars with `decision_every_n_bars` in the agent config.
 
 ## Docker
 

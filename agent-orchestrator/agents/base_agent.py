@@ -31,21 +31,30 @@ class BaseAgent(ABC):
         )
         self._last_portfolio: dict[str, Any] = {}
         self._last_market_data: dict[str, list[dict]] = {}
+        self._last_hourly_data: dict[str, list[dict]] = {}
 
     def _watchlist(self) -> tuple[str, ...]:
         count = int(self.config.get("context_symbol_count", self.context_symbol_count))
         count = max(1, min(count, len(NIFTY_50)))
         return NIFTY_50[:count]
 
-    async def build_context(self, current_date: str) -> str:
+    async def build_context(self, current_date: str, tick: dict[str, Any] | None = None) -> str:
+        tick = tick or {}
         try:
             portfolio = await self.client.get_portfolio()
             market_data: dict[str, list[dict]] = {}
+            hourly_data: dict[str, list[dict]] = {}
             for symbol in self._watchlist():
                 market_data[symbol] = await self.client.get_ohlcv(symbol, days=20)
+            if str(tick.get("interval") or "") == "60m":
+                for symbol in self._watchlist():
+                    hourly_data[symbol] = await self.client.get_ohlcv(
+                        symbol, days=20, interval="60m", bars=20
+                    )
 
             self._last_portfolio = portfolio
             self._last_market_data = market_data
+            self._last_hourly_data = hourly_data
         except MarketClientError as exc:
             if self._last_portfolio:
                 logger.warning(
@@ -55,17 +64,36 @@ class BaseAgent(ABC):
                 )
                 portfolio = self._last_portfolio
                 market_data = self._last_market_data
+                hourly_data = getattr(self, "_last_hourly_data", {})
             else:
                 raise
-        return build_trading_context(current_date, portfolio, market_data)
+        return build_trading_context(
+            current_date, portfolio, market_data, tick=tick, hourly_data=hourly_data
+        )
 
     @abstractmethod
     async def decide(self, context: str) -> list[Order]:
         """Return orders to place this turn (empty list = hold)."""
 
-    async def run_turn(self, current_date: str) -> list[dict[str, Any]]:
+    async def run_turn(
+        self, current_date: str, tick: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        tick = tick or {}
+        cadence = int(self.config.get("decision_every_n_bars", 1) or 1)
+        if cadence < 1:
+            cadence = 1
+        idx = tick.get("trading_day_index")
+        if idx is not None and cadence > 1 and int(idx) % cadence != 0:
+            logger.info(
+                "agent=%s skip decide cadence=%s index=%s",
+                self.agent_id,
+                cadence,
+                idx,
+            )
+            return []
+
         try:
-            context = await self.build_context(current_date)
+            context = await self.build_context(current_date, tick=tick)
         except MarketClientError as exc:
             logger.warning(
                 "agent=%s skip turn: cannot build context (%s)",

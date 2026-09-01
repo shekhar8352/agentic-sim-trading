@@ -70,13 +70,14 @@ class SimulationRunner:
             logger.warning("sim.tick missing date: %s", data)
             return
         logger.info(
-            "tick date=%s simulation_id=%s agents=%d",
+            "tick date=%s bar_ts=%s simulation_id=%s agents=%d",
             current_date,
+            data.get("bar_ts"),
             data.get("simulation_id"),
             len(self.agents),
         )
         results = await asyncio.gather(
-            *[agent.run_turn(str(current_date)) for agent in self.agents],
+            *[agent.run_turn(str(current_date), tick=data) for agent in self.agents],
             return_exceptions=True,
         )
         for agent, res in zip(self.agents, results):
