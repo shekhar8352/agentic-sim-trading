@@ -32,7 +32,8 @@ async def test_dispatch_runs_tick_when_sim_matches():
     await runner.dispatch_event(
         {"event": "sim.tick", "simulation_id": "sim-A", "date": "2024-06-01"}
     )
-    agent.run_turn.assert_awaited_once_with("2024-06-01")
+    agent.run_turn.assert_awaited_once()
+    assert agent.run_turn.await_args.args[0] == "2024-06-01"
 
 
 @pytest.mark.asyncio
@@ -40,13 +41,13 @@ async def test_handle_tick_runs_agents_concurrently():
     """Second agent starts before first finishes ⇒ gather ran concurrently."""
     order: list[str] = []
 
-    async def run_turn_1(date: str):
+    async def run_turn_1(date: str, tick=None):
         order.append("start-1")
         await asyncio.sleep(0.03)
         order.append("end-1")
         return []
 
-    async def run_turn_2(date: str):
+    async def run_turn_2(date: str, tick=None):
         order.append("start-2")
         await asyncio.sleep(0.03)
         order.append("end-2")
@@ -98,8 +99,8 @@ async def test_handle_tick_isolates_failing_agent():
     runner = SimulationRunner([ok, bad], "redis://localhost")
     await runner.handle_tick({"simulation_id": "x", "date": "2024-01-02"})
 
-    ok.run_turn.assert_awaited_once_with("2024-01-02")
-    bad.run_turn.assert_awaited_once_with("2024-01-02")
+    ok.run_turn.assert_awaited_once()
+    bad.run_turn.assert_awaited_once()
 
 
 @pytest.mark.asyncio

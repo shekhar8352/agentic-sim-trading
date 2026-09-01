@@ -34,6 +34,40 @@ async def test_build_context_fetches_portfolio_and_ohlcv():
 
 
 @pytest.mark.asyncio
+async def test_build_context_includes_hourly_when_tick_is_60m():
+    agent = StubAgent("agent-1", "sim-1", {"go_service_url": "http://x", "api_key": "k"})
+    agent.client.get_portfolio = AsyncMock(
+        return_value={"cash": 1000, "holdings": [], "total_value": 1000, "total_return_pct": 0}
+    )
+    agent.client.get_ohlcv = AsyncMock(
+        return_value=[{"date": "2025-03-12", "ts": "2025-03-12T03:45:00Z", "open": 1, "high": 1, "low": 1, "close": 100, "volume": 1}]
+    )
+    text = await agent.build_context(
+        "2025-03-12",
+        tick={"interval": "60m", "bar_ts": "2025-03-12T03:45:00Z", "session_bar": 2, "session_bars": 7},
+    )
+    assert "bar 2/7" in text
+    assert "HOURLY" in text
+    assert agent.client.get_ohlcv.await_count == 20
+
+
+@pytest.mark.asyncio
+async def test_run_turn_skips_decide_on_cadence():
+    agent = StubAgent(
+        "agent-1",
+        "sim-1",
+        {"go_service_url": "http://x", "api_key": "k", "decision_every_n_bars": 3},
+    )
+    agent.build_context = AsyncMock(return_value="ctx")
+    agent.client.place_order = AsyncMock(return_value={"status": "pending"})
+    results = await agent.run_turn("2025-03-12", tick={"trading_day_index": 1})
+    assert results == []
+    agent.build_context.assert_not_awaited()
+    results = await agent.run_turn("2025-03-12", tick={"trading_day_index": 3})
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
 async def test_build_context_uses_cache_when_market_unavailable():
     agent = StubAgent("agent-1", "sim-1", {"go_service_url": "http://x", "api_key": "k"})
     agent._last_portfolio = {
